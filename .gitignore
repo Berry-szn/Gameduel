@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.env
+profiles.json
+profiles.json.tmp
+.DS_Store
+*.log

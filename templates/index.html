@@ -1,0 +1,1503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#ffffff">
+    <title>GameRoom</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=25">
+</head>
+<body data-theme="default">
+
+    <header class="app-header">
+        <div class="logo" id="logo-tap" style="cursor:pointer;user-select:none;">
+            <span class="logo-mark"></span>
+            <span class="logo-text">GameRoom</span>
+        </div>
+        <div class="header-right">
+            <div id="room-pill" class="room-pill hidden">
+                <span class="room-pill-label">Room</span>
+                <span id="room-pill-code" class="room-pill-code">------</span>
+            </div>
+            <div id="series-badge" class="series-badge hidden">
+                <span id="series-score-left">0</span>
+                <span class="series-dash">:</span>
+                <span id="series-score-right">0</span>
+                <span class="series-target">first to <span id="series-target">3</span></span>
+            </div>
+            <div id="round-indicator" class="round-indicator hidden">
+                <span class="round-pill">R<span id="round-num">1</span></span>
+                <span class="players-pill"><span id="players-left">0</span> left</span>
+            </div>
+            <button id="btn-menu" class="icon-btn" title="Menu" aria-label="Menu">
+                <span class="menu-bar"></span>
+                <span class="menu-bar"></span>
+                <span class="menu-bar"></span>
+            </button>
+        </div>
+    </header>
+
+    <main id="app">
+
+        <!-- HOME -->
+        <!-- LANDING (very first screen — shown on fresh visit) -->
+        <section id="screen-landing" class="screen active">
+            <div class="card landing-card">
+                <div class="landing-hero">
+                    <div class="landing-logo">
+                        <span class="logo-mark"></span>
+                    </div>
+                    <h1 class="landing-title">GameRoom</h1>
+                    <p class="muted center">Quick games. Solo, with a friend, or in a group.</p>
+                </div>
+                <button id="btn-landing-signin" class="btn btn-secondary">Sign in</button>
+                <button id="btn-landing-guest" class="btn btn-primary">Continue as guest</button>
+                <p class="muted small center" style="margin-top:10px;">
+                    Sign-in is coming soon. Use guest for now.
+                </p>
+            </div>
+        </section>
+
+        <section id="screen-home" class="screen">
+            <!-- Always-visible profile card. Shows level / title / coins / XP.
+                 Defaults: Lvl 1, Newcomer, 0 coins, 0 XP for fresh users. -->
+            <div id="home-profile-card" class="card profile-card">
+                <div class="profile-welcome-row">
+                    <div class="profile-avatar" id="profile-avatar">A</div>
+                    <div class="profile-welcome-text">
+                        <div class="profile-welcome-hi">Welcome,</div>
+                        <div class="profile-welcome-name" id="profile-welcome-name">friend</div>
+                    </div>
+                </div>
+                <div class="profile-top">
+                    <div class="profile-level-block">
+                        <div class="profile-level">Lvl <span id="profile-level-num">1</span></div>
+                        <div class="profile-title" id="profile-title">Newcomer</div>
+                    </div>
+                    <div class="profile-streak" id="profile-streak-block">
+                        <span class="streak-flame">🪙</span>
+                        <span class="streak-num" id="profile-streak-num">0</span>
+                        <span class="streak-lab">coins</span>
+                    </div>
+                </div>
+                <div class="xp-bar-track">
+                    <div class="xp-bar-fill" id="profile-xp-fill" style="width: 0%"></div>
+                </div>
+                <div class="muted small profile-xp-text" id="profile-xp-text">0 XP &middot; 100 to Level 2</div>
+                <div class="profile-mini-stats" id="profile-mini-stats">
+                    <span class="profile-mini-stat"><b id="profile-wins">0</b> wins</span>
+                    <span class="profile-mini-stat profile-mini-stat-loss"><b id="profile-losses">0</b> losses</span>
+                    <span class="profile-mini-stat"><b id="profile-streak-count">0</b> 🔥 streak</span>
+                </div>
+            </div>
+
+            <!-- Players online prominently on home, not buried in the menu -->
+            <button id="home-online-btn" class="home-online-btn">
+                <span class="online-dot"></span>
+                <span class="home-online-text">Players online: <span id="home-online-count">0</span></span>
+                <span class="home-online-arrow">›</span>
+            </button>
+
+            <!-- Recent opponents — tap to rechallenge -->
+            <div id="recent-opponents-row" class="recent-opponents-row hidden">
+                <div class="muted small" style="margin-bottom: 6px;">Recent opponents</div>
+                <div class="recent-opponents-list" id="recent-opponents-list"></div>
+            </div>
+
+            <div class="card">
+                <h1 style="margin-bottom: 6px;">Pick a game</h1>
+                <p class="muted">All games count toward your XP and stats.</p>
+                <div class="game-grid">
+                    <button class="game-card" data-game="guessduel">
+                        <div class="game-card-art game-art-guessduel">
+                            <span class="ga-num-a">42</span>
+                            <span class="ga-vs">vs</span>
+                            <span class="ga-num-b">?</span>
+                        </div>
+                        <div class="game-card-title">GuessDuel</div>
+                        <div class="game-card-desc">Crack your opponent's secret number first. Solo, face-off, group.</div>
+                    </button>
+                    <button class="game-card" data-game="wordchain">
+                        <div class="game-card-art game-art-wordchain">
+                            <span class="ga-letter">E</span>
+                            <span class="ga-arrow">→</span>
+                            <span class="ga-letter">C</span>
+                            <span class="ga-arrow">→</span>
+                            <span class="ga-letter">D</span>
+                        </div>
+                        <div class="game-card-title">WordChain</div>
+                        <div class="game-card-desc">Each round, computer picks a letter. Words get longer each round. Survive the longest.</div>
+                    </button>
+                    <button class="game-card" data-game="oneshot">
+                        <div class="game-card-art game-art-oneshot">
+                            <span class="oneshot-pip"></span>
+                            <span class="oneshot-pip"></span>
+                            <span class="oneshot-pip filled"></span>
+                            <span class="oneshot-pip"></span>
+                            <span class="oneshot-pip"></span>
+                        </div>
+                        <div class="game-card-title">OneShot
+                            <span class="game-card-badge">DAILY</span>
+                        </div>
+                        <div class="game-card-desc">One puzzle a day. Same target for everyone. 6 guesses. Don't break the streak.</div>
+                    </button>
+                    <button class="game-card" data-game="footymind">
+                        <div class="game-card-art game-art-footymind">
+                            <span class="fm-club">ARS</span>
+                            <span class="ga-arrow">→</span>
+                            <span class="fm-club">RMA</span>
+                            <span class="ga-arrow">→</span>
+                            <span class="fm-club">?</span>
+                        </div>
+                        <div class="game-card-title">FootyMind</div>
+                        <div class="game-card-desc">Guess the footballer from their career path. Solo, 1v1, friend group.</div>
+                    </button>
+                    <button class="game-card" data-game="trivia">
+                        <div class="game-card-art game-art-trivia">
+                            <span class="tr-bubble">Q</span>
+                            <span class="tr-bubble accent">?</span>
+                        </div>
+                        <div class="game-card-title">TriviaRush</div>
+                        <div class="game-card-desc">Race against the clock. Real questions, no Wikipedia filler.</div>
+                    </button>
+                    <button class="game-card" data-game="geo">
+                        <div class="game-card-art game-art-geo">
+                            <span class="geo-emoji">🌍</span>
+                            <span class="geo-emoji">🏳️</span>
+                            <span class="geo-emoji">🗿</span>
+                        </div>
+                        <div class="game-card-title">Geography</div>
+                        <div class="game-card-desc">Flags, capitals, landmarks, continents. Pick a mode.</div>
+                    </button>
+                    <button class="game-card" data-game="timeshot">
+                        <div class="game-card-art game-art-timeshot">
+                            <span class="ts-target">5.75s</span>
+                            <span class="ts-tap">TAP</span>
+                        </div>
+                        <div class="game-card-title">TimeShot</div>
+                        <div class="game-card-desc">Stop the hidden clock. Closest to target wins. Solo, face-off, group.</div>
+                    </button>
+                </div>
+            </div>
+        </section>
+        <section id="screen-guest" class="screen">
+            <div class="card">
+                <button class="back-link" data-back="screen-landing">&larr; Back</button>
+                <h1>What is your name?</h1>
+                <p class="muted">Other players will see this. We remember it on this device.</p>
+                <input type="text" id="input-name" placeholder="Your name" maxlength="20" autocomplete="off">
+                <button id="btn-name-next" class="btn btn-primary">Continue</button>
+                <div class="error-slot" id="name-error"></div>
+            </div>
+        </section>
+
+        <!-- MODE PICKER (per game) -->
+        <section id="screen-mode-pick" class="screen">
+            <div class="card">
+                <button class="back-link" data-back="screen-home">&larr; Back</button>
+                <div class="muted small center" id="mode-pick-game-label">GAME</div>
+                <h1 class="center" id="mode-pick-title">How do you want to play?</h1>
+                <p class="muted center" id="mode-pick-blurb">Pick a mode.</p>
+
+                <div class="mode-grid">
+                    <button class="mode-card" data-pickmode="solo">
+                        <div class="mode-icon">&#129302;</div>
+                        <div class="mode-title">Solo</div>
+                        <div class="mode-desc" id="mode-pick-solo-desc">vs Computer</div>
+                    </button>
+                    <button class="mode-card" data-pickmode="faceoff">
+                        <div class="mode-icon">&#9876;&#65039;</div>
+                        <div class="mode-title">Face-off</div>
+                        <div class="mode-desc" id="mode-pick-faceoff-desc">1v1, send a link</div>
+                    </button>
+                    <button class="mode-card" data-pickmode="group">
+                        <div class="mode-icon">&#128101;</div>
+                        <div class="mode-title">Friend group</div>
+                        <div class="mode-desc" id="mode-pick-group-desc">3+ players, share a room</div>
+                    </button>
+                </div>
+
+                <!-- Settings that appear AFTER a mode is selected. Each block
+                     shows only for its matching mode. Visibility toggled by
+                     wireModePicker click handlers. -->
+                <div id="mode-pick-settings" class="mode-pick-settings hidden">
+                    <!-- Solo: computer difficulty -->
+                    <div id="mode-pick-solo-settings" class="hidden">
+                        <label>Computer difficulty</label>
+                        <div class="segmented">
+                            <button class="seg-btn" data-modepick-bot="easy">Easy</button>
+                            <button class="seg-btn active" data-modepick-bot="medium">Medium</button>
+                            <button class="seg-btn" data-modepick-bot="hard">Hard</button>
+                        </div>
+                    </div>
+                    <!-- Face-off: best of series -->
+                    <div id="mode-pick-faceoff-settings" class="hidden">
+                        <label>Best of series</label>
+                        <div class="segmented">
+                            <button class="seg-btn active" data-modepick-firstto="1">Single</button>
+                            <button class="seg-btn" data-modepick-firstto="3">First to 3</button>
+                            <button class="seg-btn" data-modepick-firstto="5">First to 5</button>
+                            <button class="seg-btn" data-modepick-firstto="7">First to 7</button>
+                        </div>
+                    </div>
+                </div>
+
+                <button id="btn-mode-pick-continue" class="btn btn-primary hidden">Continue</button>
+                <p class="muted small center" id="mode-pick-coming-note"></p>
+            </div>
+        </section>
+
+        <!-- ACTION CHOOSER (after mode = faceoff/group, before joining a room) -->
+        <section id="screen-action" class="screen">
+            <div class="card">
+                <button class="back-link" data-back="screen-mode-pick">&larr; Back</button>
+                <h1 id="action-title">Create or join?</h1>
+                <p class="muted" id="action-blurb">Start a fresh game or join one your friend created.</p>
+                <button id="btn-create-game" class="btn btn-primary">Create new game</button>
+                <button id="btn-show-join" class="btn btn-secondary">Join with code</button>
+            </div>
+        </section>
+
+        <!-- JOIN WITH CODE -->
+        <section id="screen-join-code" class="screen">
+            <div class="card">
+                <button class="back-link" data-back="screen-action">&larr; Back</button>
+                <h1>Enter room code</h1>
+                <p class="muted">The host shared a 6-character code with you.</p>
+                <input type="text" id="input-code" placeholder="ABC123" maxlength="6" autocomplete="off" style="text-transform: uppercase; letter-spacing: 0.2em; font-weight: 700; text-align: center; font-size: 22px;">
+                <button id="btn-join-with-code" class="btn btn-primary">Join</button>
+                <div class="error-slot" id="join-code-error"></div>
+            </div>
+        </section>
+
+        <!-- LOBBY -->
+        <section id="screen-lobby" class="screen">
+            <!-- Inline invite card removed — invite code now lives in #invite-modal only -->
+
+            <div class="card" id="lobby-guessduel-card">
+                <h1 id="lobby-guessduel-heading">Game settings</h1>
+                <p class="muted" id="lobby-guessduel-subblurb">Adjust if you want, then start.</p>
+                <!-- Old mode picker removed: mode is chosen on screen-mode-pick now.
+                     We hide it but keep the options divs below so they can still be
+                     toggled by State.selectedMode. -->
+
+                <!-- Solo options -->
+                <div id="solo-options" class="mode-options hidden">
+                    <label>Computer difficulty</label>
+                    <div class="segmented">
+                        <button class="seg-btn" data-bot="easy">Easy</button>
+                        <button class="seg-btn active" data-bot="medium">Medium</button>
+                        <button class="seg-btn" data-bot="hard">Hard</button>
+                    </div>
+                    <p class="muted small" id="bot-desc">Medium: solid play, makes mistakes sometimes.</p>
+                </div>
+
+                <!-- Face-off options -->
+                <div id="faceoff-options" class="mode-options">
+                    <label>Best of series</label>
+                    <div class="segmented">
+                        <button class="seg-btn active" data-firstto="1">Single</button>
+                        <button class="seg-btn" data-firstto="3">First to 3</button>
+                        <button class="seg-btn" data-firstto="5">First to 5</button>
+                        <button class="seg-btn" data-firstto="7">First to 7</button>
+                    </div>
+                </div>
+
+                <!-- Group variant options -->
+                <div id="group-options" class="mode-options hidden">
+                    <label>Group variant</label>
+                    <div class="variant-grid">
+                        <button class="variant-card active" data-variant="chain">
+                            <div class="variant-title">Chain elimination</div>
+                            <div class="variant-desc">Random chain. Slowest each round is eliminated.</div>
+                        </button>
+                        <button class="variant-card" data-variant="pick_target">
+                            <div class="variant-title">Pick your target</div>
+                            <div class="variant-desc">Choose who you attack each round.</div>
+                        </button>
+                        <button class="variant-card" data-variant="bracket">
+                            <div class="variant-title">Bracket tournament</div>
+                            <div class="variant-desc">Single-elimination, 4 or 8 players.</div>
+                        </button>
+                        <button class="variant-card" data-variant="koth">
+                            <div class="variant-title">King of the hill</div>
+                            <div class="variant-desc">Defend your number. First to the win count takes it.</div>
+                        </button>
+                    </div>
+
+                    <div id="bracket-sub" class="sub-option hidden">
+                        <label>Bracket size</label>
+                        <div class="segmented">
+                            <button class="seg-btn active" data-bracket="4">4 players</button>
+                            <button class="seg-btn" data-bracket="8">8 players</button>
+                        </div>
+                    </div>
+
+                    <div id="koth-sub" class="sub-option hidden">
+                        <label>First to</label>
+                        <div class="segmented">
+                            <button class="seg-btn active" data-koth="3">3 wins</button>
+                            <button class="seg-btn" data-koth="5">5 wins</button>
+                            <button class="seg-btn" data-koth="7">7 wins</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card hidden" id="lobby-wordchain-card">
+                <h1>WordChain</h1>
+                <p class="muted">Computer announces a letter each round. Words get longer every round. Last player standing wins.</p>
+
+                <label>Difficulty</label>
+                <div class="segmented">
+                    <button class="seg-btn active" data-wcdiff="easy">Easy</button>
+                    <button class="seg-btn" data-wcdiff="medium">Medium</button>
+                    <button class="seg-btn" data-wcdiff="hard">Hard</button>
+                </div>
+                <p class="muted small" id="wc-diff-desc">Easy: round 1 starts at 3 letters, common letters only.</p>
+
+                <label>Time per turn</label>
+                <div class="segmented">
+                    <button class="seg-btn" data-wctimer="20">20s</button>
+                    <button class="seg-btn active" data-wctimer="30">30s</button>
+                    <button class="seg-btn" data-wctimer="45">45s</button>
+                    <button class="seg-btn" data-wctimer="60">60s</button>
+                </div>
+
+                <div id="wc-solo-options" class="mode-options hidden" style="margin-top: 12px;">
+                    <label>Computer difficulty</label>
+                    <div class="segmented">
+                        <button class="seg-btn" data-wcbot="easy">Easy</button>
+                        <button class="seg-btn active" data-wcbot="medium">Medium</button>
+                        <button class="seg-btn" data-wcbot="hard">Hard</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card hidden" id="lobby-geography-card">
+                <h1>Geography</h1>
+                <p class="muted">Race to answer correctly. Faster correct answers score more points.</p>
+
+                <label>Sub-mode</label>
+                <div class="segmented">
+                    <button class="seg-btn active" data-geomode="flags">Flags</button>
+                    <button class="seg-btn" data-geomode="capitals">Capitals</button>
+                    <button class="seg-btn" data-geomode="landmarks">Landmarks</button>
+                    <button class="seg-btn" data-geomode="continents">Continents</button>
+                </div>
+
+                <label>Rounds</label>
+                <div class="segmented">
+                    <button class="seg-btn" data-georounds="3">3</button>
+                    <button class="seg-btn active" data-georounds="5">5</button>
+                    <button class="seg-btn" data-georounds="10">10</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Players in this room</h2>
+                <div class="player-list" id="lobby-players"></div>
+                <button id="btn-start" class="btn btn-primary">Start game</button>
+            </div>
+
+            <div class="card hidden" id="match-history-card">
+                <h2>Recent matches in this room</h2>
+                <div class="history-list" id="match-history-list"></div>
+            </div>
+        </section>
+
+        <!-- SIDELINED -->
+        <section id="screen-sidelined" class="screen">
+            <div class="card hero-card">
+                <div class="dots-loader center"><span></span><span></span><span></span></div>
+                <h1>One moment</h1>
+                <p class="muted"><strong id="sidelined-by-name">Someone</strong> is playing a solo game.</p>
+                <p class="muted small">You will be back in the lobby once they finish.</p>
+            </div>
+        </section>
+
+        <!-- COIN TOSS -->
+        <section id="screen-cointoss" class="screen">
+            <div class="cointoss-stage">
+                <div class="coin" id="coin">
+                    <div class="coin-face coin-face-heads">H</div>
+                    <div class="coin-face coin-face-tails">T</div>
+                </div>
+                <p class="muted">Coin toss</p>
+                <p class="cointoss-winner hidden" id="cointoss-winner">
+                    <span class="muted small">Host</span>
+                    <span class="winner-pop" id="cointoss-name">&mdash;</span>
+                </p>
+            </div>
+        </section>
+
+        <!-- SETUP -->
+        <section id="screen-setup" class="screen">
+            <div class="card" id="setup-host-view">
+                <div class="badge badge-lemon">You're the host</div>
+                <h1>Set the rules</h1>
+                <p class="muted">You won the coin toss. Pick the range and difficulty.</p>
+
+                <label>Difficulty</label>
+                <div class="segmented">
+                    <button class="seg-btn active" data-difficulty="easy">Easy</button>
+                    <button class="seg-btn" data-difficulty="medium">Medium</button>
+                    <button class="seg-btn" data-difficulty="hard">Hard</button>
+                </div>
+                <p class="muted small" id="difficulty-desc">Easy: whole numbers only.</p>
+
+                <label>Range</label>
+                <div class="range-inputs">
+                    <input type="number" id="input-min" value="1" placeholder="Min">
+                    <span class="range-dash">to</span>
+                    <input type="number" id="input-max" value="1000" placeholder="Max">
+                </div>
+
+                <label>Turn timer</label>
+                <div class="segmented">
+                    <button class="seg-btn" data-timer="15">15s</button>
+                    <button class="seg-btn active" data-timer="20">20s</button>
+                    <button class="seg-btn" data-timer="30">30s</button>
+                    <button class="seg-btn" data-timer="60">60s</button>
+                </div>
+
+                <button id="btn-submit-settings" class="btn btn-primary">Lock in rules</button>
+                <div class="error-slot" id="setup-error"></div>
+            </div>
+
+            <div class="card" id="setup-waiting-view">
+                <div class="badge">Waiting</div>
+                <h1>Host is setting up</h1>
+                <p class="muted"><strong id="setup-host-name">Someone</strong> is choosing the rules.</p>
+                <div class="dots-loader"><span></span><span></span><span></span></div>
+            </div>
+        </section>
+
+        <!-- SECRETS -->
+        <section id="screen-secrets" class="screen">
+            <div class="card">
+                <div class="badge badge-blue">Private</div>
+                <h1 id="secrets-heading">Set your secret</h1>
+                <p class="muted">
+                    Pick a number between <strong id="secret-range">1 and 1000</strong>.
+                    Nobody else can see it.
+                </p>
+                <input type="number" id="input-secret" placeholder="Your secret number">
+                <button id="btn-submit-secret" class="btn btn-primary">Lock it in</button>
+                <div class="error-slot" id="secret-error"></div>
+
+                <div class="divider"></div>
+                <p class="muted small" id="secrets-waiting-label">Waiting on:</p>
+                <div class="player-list compact" id="secrets-pending"></div>
+            </div>
+        </section>
+
+        <!-- PICK TARGET (group: pick_target variant) -->
+        <section id="screen-pick-target" class="screen">
+            <div class="card">
+                <div class="badge badge-lemon">Strategy</div>
+                <h1>Pick your target</h1>
+                <p class="muted">Choose who you want to crack this round. Multiple people can pick the same target.</p>
+                <div class="target-grid" id="target-grid"></div>
+                <button id="btn-lock-target" class="btn btn-primary" disabled>Lock in target</button>
+                <div class="error-slot" id="target-error"></div>
+
+                <div class="divider"></div>
+                <p class="muted small">Players still picking:</p>
+                <div class="player-list compact" id="pick-pending"></div>
+            </div>
+        </section>
+
+        <!-- PLAYING -->
+        <section id="screen-playing" class="screen">
+            <div class="activity-ticker" id="activity-ticker">
+                <span class="ticker-icon">&#9889;</span>
+                <div class="ticker-content" id="ticker-content">Game on.</div>
+            </div>
+
+            <div class="turn-banner" id="turn-banner">
+                <div class="turn-banner-text"><span id="turn-label">Your turn</span></div>
+                <div class="timer" id="timer">20</div>
+            </div>
+
+            <!-- KOTH score panel (only visible in KOTH mode) -->
+            <div class="card koth-panel hidden" id="koth-panel">
+                <h2>King of the hill</h2>
+                <div class="koth-king">
+                    <span class="muted small">Current king:</span>
+                    <span class="koth-king-name" id="koth-king-name">&mdash;</span>
+                </div>
+                <div class="koth-scores" id="koth-scores"></div>
+                <p class="muted small">First to <span id="koth-target-display">3</span> wins.</p>
+            </div>
+
+            <!-- Bracket panel (only visible in bracket mode) -->
+            <div class="card bracket-panel hidden" id="bracket-panel">
+                <h2>Bracket</h2>
+                <div class="bracket-display" id="bracket-display"></div>
+            </div>
+
+            <div class="card" id="my-turn-card">
+                <p class="target-line">Guessing <strong id="target-name">...</strong>'s number</p>
+                <p class="muted small">Range: <span id="play-range">1 to 1000</span></p>
+                <p class="muted small koth-hint hidden" id="koth-hint">You get ONE guess. Use the higher/lower hints from earlier guessers.</p>
+                <input type="number" id="input-guess" placeholder="Your guess" autocomplete="off">
+                <button id="btn-submit-guess" class="btn btn-primary">Guess</button>
+                <div class="error-slot" id="guess-error"></div>
+            </div>
+
+            <div class="card" id="waiting-turn-card">
+                <p class="muted"><strong id="active-player-name">Someone</strong> is taking their turn.</p>
+            </div>
+
+            <div class="card chain-card" id="chain-card">
+                <h2 id="chain-card-title">The chain</h2>
+                <div class="chain" id="chain-display"></div>
+            </div>
+
+            <div class="card">
+                <h2>Your guesses <span class="muted small">(private)</span></h2>
+                <div class="guess-list" id="guess-list">
+                    <p class="empty-state muted small">No guesses yet.</p>
+                </div>
+            </div>
+
+            <!-- Shared guess history (KOTH mode: everyone sees all guesses against the king) -->
+            <div class="card hidden" id="shared-guesses-card">
+                <h2>Guesses against the king <span class="muted small">(everyone sees this)</span></h2>
+                <div class="guess-list" id="shared-guesses"></div>
+            </div>
+
+            <div class="card">
+                <h2>Players</h2>
+                <div class="player-list compact" id="play-players"></div>
+            </div>
+        </section>
+
+        <!-- ROUND END -->
+        <section id="screen-round-end" class="screen">
+            <div class="card">
+                <div class="big-stamp" id="round-end-stamp">ROUND OVER</div>
+                <p class="muted center">Secrets revealed</p>
+                <div class="reveal-list" id="reveal-list"></div>
+                <p class="muted small center">Next round starting</p>
+                <div class="dots-loader center"><span></span><span></span><span></span></div>
+            </div>
+        </section>
+
+        <!-- KOTH ROUND END -->
+        <section id="screen-koth-round-end" class="screen">
+            <div class="card">
+                <div class="big-stamp" id="koth-round-stamp">DEFENDED</div>
+                <div class="koth-round-result">
+                    <p class="muted center">The king's secret was</p>
+                    <div class="koth-secret-reveal" id="koth-secret-reveal">&mdash;</div>
+                </div>
+                <div class="koth-scores" id="koth-scores-end"></div>
+                <p class="muted small center" id="koth-next-king">Next king: ...</p>
+                <div class="dots-loader center"><span></span><span></span><span></span></div>
+            </div>
+        </section>
+
+        <!-- BRACKET INTRO -->
+        <section id="screen-bracket-intro" class="screen">
+            <div class="card">
+                <h1>Tournament bracket</h1>
+                <p class="muted">Single elimination. Winner takes all.</p>
+                <div class="bracket-display" id="bracket-intro-display"></div>
+                <p class="muted small center">First match starting</p>
+                <div class="dots-loader center"><span></span><span></span><span></span></div>
+            </div>
+        </section>
+
+        <!-- BRACKET MATCH END -->
+        <section id="screen-bracket-match-end" class="screen">
+            <div class="card">
+                <div class="big-stamp" id="bracket-stamp">MATCH WON</div>
+                <div class="match-winner" id="bracket-match-winner">&mdash;</div>
+                <div class="bracket-display" id="bracket-match-end-display"></div>
+                <p class="muted small center" id="bracket-next-label">Next match starting</p>
+                <div class="dots-loader center"><span></span><span></span><span></span></div>
+            </div>
+        </section>
+
+        <!-- MATCH END (face-off series) -->
+        <section id="screen-match-end" class="screen">
+            <div class="card">
+                <div class="big-stamp" id="match-end-stamp">MATCH WON</div>
+                <div class="match-winner" id="match-winner-name">&mdash;</div>
+                <div class="series-score-display">
+                    <div class="score-block">
+                        <div class="score-name" id="me-block-name">You</div>
+                        <div class="score-value" id="me-block-score">0</div>
+                    </div>
+                    <div class="score-vs">vs</div>
+                    <div class="score-block">
+                        <div class="score-name" id="opp-block-name">Opponent</div>
+                        <div class="score-value" id="opp-block-score">0</div>
+                    </div>
+                </div>
+                <p class="muted center">First to <strong id="match-end-target">3</strong> wins the series</p>
+                <p class="muted small center">Next match starting</p>
+                <div class="dots-loader center"><span></span><span></span><span></span></div>
+            </div>
+        </section>
+
+        <!-- GAME OVER -->
+        <section id="screen-game-over" class="screen">
+            <div class="card">
+                <div class="winner-stage">
+                    <div class="winner-label">WINNER</div>
+                    <div class="winner-name" id="winner-name">&mdash;</div>
+                </div>
+
+                <div id="game-stats-panel" class="game-stats-panel"></div>
+
+                <div class="button-row" style="margin-top:18px">
+                    <button id="btn-rematch" class="btn btn-primary">Rematch</button>
+                    <button id="btn-next-game" class="btn btn-secondary">Lobby</button>
+                </div>
+
+                <div class="divider"></div>
+
+                <h2>Secrets revealed</h2>
+                <div class="reveal-list" id="final-secrets"></div>
+                <h2>Leaderboard <span class="muted small">(this room)</span></h2>
+                <div class="leaderboard" id="leaderboard"></div>
+            </div>
+        </section>
+
+        <!-- WORDCHAIN ROUND INTRO -->
+        <section id="screen-wc-round-intro" class="screen">
+            <div class="card wc-intro-card">
+                <div class="muted small center">Round <span id="wc-round-num">1</span></div>
+                <div class="wc-letter-big" id="wc-letter-intro">?</div>
+                <p class="muted center">
+                    Words starting with <strong id="wc-letter-text">?</strong>,
+                    at least <strong id="wc-min-len">3</strong> letters.
+                </p>
+                <p class="muted small center">Get ready...</p>
+                <div class="dots-loader center"><span></span><span></span><span></span></div>
+            </div>
+        </section>
+
+        <!-- WORDCHAIN PLAYING -->
+        <section id="screen-wc-playing" class="screen">
+            <div class="turn-banner" id="wc-turn-banner">
+                <div class="turn-banner-text"><span id="wc-turn-label">Your turn</span></div>
+                <div class="timer" id="wc-timer">30</div>
+            </div>
+
+            <div class="card wc-letter-card">
+                <div class="muted small">Round <span id="wc-play-round">1</span> &middot; min <span id="wc-play-min-len">3</span> letters</div>
+                <div class="wc-letter-display" id="wc-letter-display">?</div>
+            </div>
+
+            <div class="card" id="wc-my-turn-card">
+                <p class="muted">Type a word starting with <strong id="wc-letter-prompt">?</strong>, at least <strong id="wc-min-len-prompt">3</strong> letters. No repeats.</p>
+                <input type="text" id="wc-input-word" placeholder="Your word" autocomplete="off" autocapitalize="none" spellcheck="false">
+                <button id="wc-btn-submit" class="btn btn-primary">Submit</button>
+                <div class="error-slot" id="wc-error"></div>
+            </div>
+
+            <div class="card hidden" id="wc-waiting-card">
+                <p class="muted"><strong id="wc-active-name">Someone</strong> is thinking...</p>
+            </div>
+
+            <div class="card">
+                <h2>Words used this round</h2>
+                <div class="wc-words-list" id="wc-words-this-round">
+                    <p class="empty-state muted small">No words yet.</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Players</h2>
+                <div class="player-list compact" id="wc-players-list"></div>
+            </div>
+        </section>
+
+        <!-- ONESHOT (daily seeded number puzzle) -->
+        <section id="screen-oneshot-intro" class="screen">
+            <div class="card oneshot-intro-card">
+                <div class="muted small center">OneShot &middot; Daily Puzzle</div>
+                <h1 class="center" id="oneshot-date">Today</h1>
+                <p class="muted center">
+                    A number from <strong>1 to 100</strong>. You have <strong>6 guesses</strong>.
+                    Higher / lower hints after each guess.
+                </p>
+                <div class="oneshot-streak-row">
+                    <div class="streak-block">
+                        <div class="streak-val" id="oneshot-streak-current">0</div>
+                        <div class="streak-lab muted small">Current streak</div>
+                    </div>
+                    <div class="streak-block">
+                        <div class="streak-val" id="oneshot-streak-best">0</div>
+                        <div class="streak-lab muted small">Best streak</div>
+                    </div>
+                    <div class="streak-block">
+                        <div class="streak-val" id="oneshot-streak-played">0</div>
+                        <div class="streak-lab muted small">Played</div>
+                    </div>
+                </div>
+                <button id="btn-oneshot-start" class="btn btn-primary">Play today's puzzle</button>
+                <button class="btn btn-secondary back-link" data-back="screen-home" style="margin-top:8px;">&larr; Back</button>
+            </div>
+        </section>
+
+        <section id="screen-oneshot-play" class="screen">
+            <div class="card oneshot-play-card">
+                <div class="oneshot-header">
+                    <div class="muted small">OneShot</div>
+                    <div class="oneshot-guesses-left">
+                        <span id="oneshot-guesses-left">6</span> left
+                    </div>
+                </div>
+                <p class="muted center">Number between <strong>1</strong> and <strong>100</strong>.</p>
+                <div class="oneshot-pips" id="oneshot-pips"></div>
+                <div class="oneshot-history" id="oneshot-history"></div>
+                <input type="number" id="oneshot-input" placeholder="Your guess" min="1" max="100" step="1" autocomplete="off">
+                <button id="oneshot-submit" class="btn btn-primary">Guess</button>
+                <div class="error-slot" id="oneshot-error"></div>
+            </div>
+        </section>
+
+        <section id="screen-oneshot-done" class="screen">
+            <div class="card">
+                <div class="oneshot-result-stamp" id="oneshot-result-stamp">SOLVED</div>
+                <div class="oneshot-answer center">
+                    <div class="muted small">The number was</div>
+                    <div class="oneshot-answer-num" id="oneshot-answer-num">—</div>
+                </div>
+                <div class="oneshot-share-grid" id="oneshot-share-grid"></div>
+                <div class="oneshot-streak-row">
+                    <div class="streak-block">
+                        <div class="streak-val" id="oneshot-done-streak">0</div>
+                        <div class="streak-lab muted small">Streak</div>
+                    </div>
+                    <div class="streak-block">
+                        <div class="streak-val" id="oneshot-done-played">0</div>
+                        <div class="streak-lab muted small">Played</div>
+                    </div>
+                    <div class="streak-block">
+                        <div class="streak-val" id="oneshot-done-winrate">0%</div>
+                        <div class="streak-lab muted small">Win rate</div>
+                    </div>
+                </div>
+                <button id="oneshot-share" class="btn btn-primary">Share result</button>
+                <button id="oneshot-back-home" class="btn btn-secondary">Home</button>
+                <p class="muted small center" id="oneshot-next-puzzle">Next puzzle in <span id="oneshot-countdown">--:--:--</span></p>
+            </div>
+        </section>
+
+        <!-- FOOTYMIND -->
+        <section id="screen-footymind-intro" class="screen">
+            <div class="card">
+                <button class="back-link" data-back="screen-home">&larr; Back</button>
+                <div class="muted small center">FootyMind</div>
+                <h1 class="center">Guess the footballer</h1>
+                <p class="muted">You'll see a career path — clubs and years. Type the player's name before you run out of hints.</p>
+
+                <label>Mode</label>
+                <div class="mode-grid">
+                    <button class="mode-card active" data-fmmode="solo">
+                        <div class="mode-icon">&#129302;</div>
+                        <div class="mode-title">Solo</div>
+                        <div class="mode-desc">10 players, see how far you get</div>
+                    </button>
+                    <button class="mode-card" data-fmmode="duel">
+                        <div class="mode-icon">&#9876;&#65039;</div>
+                        <div class="mode-title">1v1</div>
+                        <div class="mode-desc">First correct wins (coming next)</div>
+                    </button>
+                    <button class="mode-card" data-fmmode="group">
+                        <div class="mode-icon">&#128101;</div>
+                        <div class="mode-title">Friend group</div>
+                        <div class="mode-desc">3+ players (coming next)</div>
+                    </button>
+                </div>
+
+                <label>Difficulty</label>
+                <div class="segmented">
+                    <button class="seg-btn active" data-fmdiff="easy">Easy</button>
+                    <button class="seg-btn" data-fmdiff="medium">Medium</button>
+                    <button class="seg-btn" data-fmdiff="hard">Hard</button>
+                </div>
+                <p class="muted small" id="footymind-diff-desc">Easy: superstars only — Messi, Ronaldo, Neymar level.</p>
+
+                <button id="btn-footymind-start" class="btn btn-primary">Start</button>
+            </div>
+        </section>
+
+        <section id="screen-footymind-play" class="screen">
+            <div class="turn-banner" id="footymind-banner">
+                <div class="turn-banner-text">
+                    <span id="footymind-progress">1 / 10</span> &middot;
+                    Score <span id="footymind-score">0</span>
+                </div>
+                <div class="hint-badge">
+                    Hint <span id="footymind-hint-num">1</span>/<span id="footymind-hint-max">3</span>
+                </div>
+            </div>
+
+            <div class="card footymind-card">
+                <div class="footymind-meta" id="footymind-meta">
+                    <span class="footymind-meta-pill empty" id="footymind-nationality"></span>
+                    <span class="footymind-meta-pill empty" id="footymind-position"></span>
+                </div>
+                <h2 class="footymind-prompt">Career path</h2>
+                <div class="footymind-path" id="footymind-path"></div>
+                <input type="text" id="footymind-input" class="footymind-text-input"
+                       placeholder="Type the player's name (e.g. messi, leo, cr7)"
+                       autocomplete="off" autocapitalize="words" spellcheck="false">
+                <button id="footymind-submit" class="btn btn-primary">Guess</button>
+                <div class="footymind-actions">
+                    <button id="footymind-hint" class="btn btn-secondary">Next hint</button>
+                    <button id="footymind-skip" class="btn btn-secondary">Skip</button>
+                </div>
+                <div class="error-slot" id="footymind-feedback"></div>
+            </div>
+        </section>
+
+        <section id="screen-footymind-done" class="screen">
+            <div class="card">
+                <div class="big-stamp center" id="footymind-result-stamp">SCORE</div>
+                <div class="footymind-final-score" id="footymind-final-score">0 / 10</div>
+                <h2>Your answers</h2>
+                <div class="footymind-answers" id="footymind-answers"></div>
+                <button id="footymind-replay" class="btn btn-primary">Play again</button>
+                <button id="footymind-back-home" class="btn btn-secondary">Home</button>
+            </div>
+        </section>
+
+        <!-- TRIVIARUSH -->
+        <section id="screen-trivia-intro" class="screen">
+            <div class="card">
+                <button class="back-link" data-back="screen-home">&larr; Back</button>
+                <div class="muted small center">TriviaRush</div>
+                <h1 class="center">10 questions, mixed up</h1>
+                <p class="muted">Multiple choice, "which is older", true/false. Mixed categories. No filler.</p>
+
+                <label>Mode</label>
+                <div class="mode-grid">
+                    <button class="mode-card active" data-trmode="solo">
+                        <div class="mode-icon">&#129302;</div>
+                        <div class="mode-title">Solo</div>
+                        <div class="mode-desc">Beat your high score</div>
+                    </button>
+                    <button class="mode-card" data-trmode="duel">
+                        <div class="mode-icon">&#9876;&#65039;</div>
+                        <div class="mode-title">1v1</div>
+                        <div class="mode-desc">Coming next</div>
+                    </button>
+                    <button class="mode-card" data-trmode="group">
+                        <div class="mode-icon">&#128101;</div>
+                        <div class="mode-title">Friend group</div>
+                        <div class="mode-desc">Coming next</div>
+                    </button>
+                </div>
+
+                <label>Categories (tap to toggle)</label>
+                <div class="trivia-cats" id="trivia-cats">
+                    <button class="cat-chip active" data-cat="football">⚽ Football</button>
+                    <button class="cat-chip active" data-cat="geography">🌍 Geography</button>
+                    <button class="cat-chip active" data-cat="science">🔬 Science</button>
+                    <button class="cat-chip active" data-cat="movies">🎬 Movies</button>
+                    <button class="cat-chip active" data-cat="music">🎵 Music</button>
+                    <button class="cat-chip active" data-cat="history">📜 History</button>
+                    <button class="cat-chip active" data-cat="pop">📱 Pop Culture</button>
+                </div>
+                <p class="muted small" id="trivia-cats-note">All categories selected.</p>
+
+                <button id="btn-trivia-start" class="btn btn-primary">Start</button>
+            </div>
+        </section>
+
+        <section id="screen-trivia-play" class="screen">
+            <div class="turn-banner">
+                <div class="turn-banner-text">
+                    <span id="trivia-progress">1 / 10</span> &middot;
+                    Score <span id="trivia-score">0</span>
+                </div>
+                <div class="timer" id="trivia-timer">15</div>
+            </div>
+            <div class="card trivia-card">
+                <div class="trivia-cat-label" id="trivia-cat-label">⚽ Football</div>
+                <h2 class="trivia-question" id="trivia-question">...</h2>
+                <div class="trivia-options" id="trivia-options"></div>
+                <div class="trivia-explain hidden" id="trivia-explain"></div>
+                <button id="trivia-next" class="btn btn-primary hidden">Next question</button>
+            </div>
+        </section>
+
+        <section id="screen-trivia-done" class="screen">
+            <div class="card">
+                <div class="big-stamp center" id="trivia-result-stamp">SCORE</div>
+                <div class="trivia-final-score" id="trivia-final-score">0 / 10</div>
+                <h2>Your answers</h2>
+                <div class="trivia-review" id="trivia-review"></div>
+                <button id="trivia-replay" class="btn btn-primary">Play again</button>
+                <button id="trivia-back-home" class="btn btn-secondary">Home</button>
+            </div>
+        </section>
+
+        <!-- GEOGRAPHY -->
+        <section id="screen-geo-intro" class="screen">
+            <div class="card">
+                <button class="back-link" data-back="screen-home">&larr; Back</button>
+                <div class="muted small center">Geography</div>
+                <h1 class="center">Pick a sub-mode</h1>
+                <p class="muted center">Each one is a 10-question round.</p>
+
+                <div class="geo-submode-grid">
+                    <button class="geo-submode-card active" data-geomode="flags">
+                        <span class="geo-icon">🏳️</span>
+                        <span class="geo-name">Flags</span>
+                        <span class="geo-sub">Identify the country</span>
+                    </button>
+                    <button class="geo-submode-card" data-geomode="capitals">
+                        <span class="geo-icon">🏛️</span>
+                        <span class="geo-name">Capitals</span>
+                        <span class="geo-sub">Multiple choice</span>
+                    </button>
+                    <button class="geo-submode-card" data-geomode="landmarks">
+                        <span class="geo-icon">🗿</span>
+                        <span class="geo-name">Landmarks</span>
+                        <span class="geo-sub">Name what you see</span>
+                    </button>
+                    <button class="geo-submode-card" data-geomode="continents">
+                        <span class="geo-icon">🌍</span>
+                        <span class="geo-name">Continents</span>
+                        <span class="geo-sub">Multiple choice</span>
+                    </button>
+                </div>
+
+                <label>Difficulty</label>
+                <div class="segmented">
+                    <button class="seg-btn" data-geodiff="easy">Easy</button>
+                    <button class="seg-btn" data-geodiff="medium">Medium</button>
+                    <button class="seg-btn" data-geodiff="hard">Hard</button>
+                    <button class="seg-btn" data-geodiff="legend">Legend</button>
+                    <button class="seg-btn active" data-geodiff="mixed">Mixed</button>
+                </div>
+
+                <p class="muted small" id="geo-coming-note">Multiplayer for Geography is coming next.</p>
+
+                <button id="btn-geo-start" class="btn btn-primary">Start</button>
+            </div>
+        </section>
+
+        <section id="screen-geo-play" class="screen">
+            <div class="turn-banner">
+                <div class="turn-banner-text">
+                    <span id="geo-progress">1 / 10</span> &middot;
+                    Score <span id="geo-score">0</span>
+                </div>
+                <div class="timer" id="geo-timer">20</div>
+            </div>
+            <div class="card geo-card">
+                <div class="geo-mode-label" id="geo-mode-label">🏳️ Flags</div>
+                <!-- Image (flags / landmarks) -->
+                <div class="geo-image-wrap hidden" id="geo-image-wrap">
+                    <img id="geo-image" class="geo-image" alt="">
+                </div>
+                <!-- Text prompt (capitals / continents) -->
+                <h2 class="geo-prompt" id="geo-prompt">...</h2>
+                <!-- Text input mode (flags / landmarks) -->
+                <div id="geo-text-input-block" class="hidden">
+                    <input type="text" id="geo-text-input" class="footymind-text-input"
+                           placeholder="Your answer" autocomplete="off"
+                           autocapitalize="words" spellcheck="false">
+                    <button id="geo-text-submit" class="btn btn-primary">Submit</button>
+                </div>
+                <!-- Multiple-choice mode (capitals / continents) -->
+                <div id="geo-options" class="trivia-options hidden"></div>
+                <div class="geo-explain hidden" id="geo-explain"></div>
+                <button id="geo-next" class="btn btn-primary hidden">Next</button>
+                <button id="geo-skip" class="btn btn-secondary">Skip</button>
+            </div>
+        </section>
+
+        <section id="screen-geo-done" class="screen">
+            <div class="card">
+                <div class="big-stamp center" id="geo-result-stamp">SCORE</div>
+                <div class="trivia-final-score" id="geo-final-score">0 / 10</div>
+                <h2>Your answers</h2>
+                <div class="trivia-review" id="geo-review"></div>
+                <button id="geo-replay" class="btn btn-primary">Play again</button>
+                <button id="geo-home" class="btn btn-secondary">Home</button>
+            </div>
+        </section>
+
+        <!-- GEOGRAPHY MULTIPLAYER -->
+        <section id="screen-geo-mp-round" class="screen">
+            <div class="card">
+                <div class="geo-mp-top-row">
+                    <div class="muted small">Round <span id="geo-mp-round-num">1</span>/<span id="geo-mp-round-total">5</span></div>
+                    <div class="geo-mp-timer" id="geo-mp-timer">15s</div>
+                </div>
+                <div class="geo-mp-scoreboard" id="geo-mp-scoreboard"></div>
+
+                <div class="geo-image-wrap" id="geo-mp-image-wrap">
+                    <img id="geo-mp-image" class="geo-image" alt="">
+                </div>
+                <div class="geo-prompt" id="geo-mp-prompt" style="font-size: 18px; margin: 10px 0;"></div>
+                <div id="geo-mp-options-wrap"></div>
+                <div id="geo-mp-text-wrap" class="hidden">
+                    <input type="text" id="geo-mp-text-input" placeholder="Your answer" autocomplete="off">
+                    <button id="geo-mp-text-submit" class="btn btn-primary">Submit</button>
+                </div>
+                <p class="muted small center" id="geo-mp-waiting" style="display:none;">Waiting for the other players...</p>
+            </div>
+        </section>
+
+        <section id="screen-geo-mp-round-end" class="screen">
+            <div class="card">
+                <div class="muted small center">Round <span id="geo-mp-re-round">1</span> result</div>
+                <p class="center" style="margin: 8px 0;">Correct answer: <b id="geo-mp-re-answer">—</b></p>
+                <div class="geo-mp-results-list" id="geo-mp-results-list"></div>
+                <p class="muted small center" id="geo-mp-re-next">Next round in 4s...</p>
+            </div>
+        </section>
+
+        <section id="screen-geo-mp-game-over" class="screen">
+            <div class="card center">
+                <div class="big-stamp" id="geo-mp-go-stamp">GAME OVER</div>
+                <h1 id="geo-mp-go-winner">Winner</h1>
+                <div class="geo-mp-final-ranking" id="geo-mp-final-ranking"></div>
+                <button id="geo-mp-replay" class="btn btn-primary">Play again</button>
+                <button id="geo-mp-home" class="btn btn-secondary">Home</button>
+            </div>
+        </section>
+
+        <!-- TIMESHOT SCREENS -->
+        <section id="screen-ts-intro" class="screen">
+            <div class="card">
+                <button class="back-link" data-back="screen-mode-pick">&larr; Back</button>
+                <h1 class="center">TimeShot</h1>
+                <p class="muted center">A target time appears. Tap once to start. Tap again to stop. You won't see the clock running. Closest to target wins.</p>
+
+                <label>Difficulty</label>
+                <div class="segmented">
+                    <button class="seg-btn" data-tsdiff="easy">Easy</button>
+                    <button class="seg-btn active" data-tsdiff="medium">Medium</button>
+                    <button class="seg-btn" data-tsdiff="hard">Hard</button>
+                </div>
+                <p class="muted small" id="ts-diff-desc">Medium: 2-8 seconds, 1 decimal.</p>
+
+                <label>First to (rounds won)</label>
+                <div class="segmented">
+                    <button class="seg-btn" data-tsfirstto="1">1</button>
+                    <button class="seg-btn active" data-tsfirstto="3">3</button>
+                    <button class="seg-btn" data-tsfirstto="5">5</button>
+                    <button class="seg-btn" data-tsfirstto="7">7</button>
+                </div>
+
+                <button id="ts-start-game" class="btn btn-primary" style="margin-top: 14px;">Start TimeShot</button>
+            </div>
+        </section>
+
+        <section id="screen-ts-round" class="screen">
+            <div class="card center">
+                <div class="muted small">Round <span id="ts-round-num">1</span></div>
+                <div class="ts-score-row">
+                    <span id="ts-score-left">0</span>
+                    <span class="series-dash">:</span>
+                    <span id="ts-score-right">0</span>
+                    <span class="series-target">first to <span id="ts-first-to">3</span></span>
+                </div>
+                <div class="ts-target-block">
+                    <div class="muted small">Target time</div>
+                    <div class="ts-target-value" id="ts-target-value">5.75s</div>
+                </div>
+                <button id="ts-tap-btn" class="ts-tap-btn">
+                    <span id="ts-tap-label">TAP TO START</span>
+                </button>
+                <p class="muted small" id="ts-tap-hint">When you stop, your guess is recorded. You won't see the clock.</p>
+                <div id="ts-waiting-msg" class="muted small hidden" style="margin-top: 10px;">Waiting for opponent...</div>
+            </div>
+        </section>
+
+        <section id="screen-ts-round-end" class="screen">
+            <div class="card">
+                <h2 class="center">Round <span id="ts-re-round">1</span> result</h2>
+                <p class="center muted">Target was <b id="ts-re-target">5.75s</b></p>
+                <div class="ts-results" id="ts-results-list"></div>
+                <p class="muted small center" id="ts-re-next">Next round in 4s...</p>
+            </div>
+        </section>
+
+        <section id="screen-ts-game-over" class="screen">
+            <div class="card">
+                <div class="big-stamp center" id="ts-go-stamp">WINNER</div>
+                <div class="trivia-final-score center" id="ts-go-winner">—</div>
+                <h2>Final standings</h2>
+                <div class="ts-final-ranking" id="ts-final-ranking"></div>
+                <button id="ts-replay" class="btn btn-primary">Play again</button>
+                <button id="ts-home" class="btn btn-secondary">Home</button>
+            </div>
+        </section>
+
+        <!-- JOIN MATCH CODE (for 1v1 games, future) -->
+        <section id="screen-match-join" class="screen">
+            <div class="card">
+                <button class="back-link" data-back="screen-home">&larr; Back</button>
+                <h1>Join a match</h1>
+                <p class="muted">Enter the 4-character match code your friend shared.</p>
+                <input type="text" id="match-input-code" placeholder="ABCD" maxlength="4" autocomplete="off" style="text-transform: uppercase; letter-spacing: 0.3em; font-weight: 700; text-align: center; font-size: 24px;">
+                <button id="btn-match-join-go" class="btn btn-primary">Join</button>
+                <div class="error-slot" id="match-join-error"></div>
+            </div>
+        </section>
+
+
+    </main>
+
+    <!-- OVERLAYS -->
+    <div id="crack-overlay" class="overlay hidden">
+        <div class="crack-content">
+            <div class="crack-burst"></div>
+            <div class="crack-label">CRACKED IT</div>
+            <div class="crack-name" id="crack-name">&mdash;</div>
+        </div>
+    </div>
+
+    <div id="round-banner" class="overlay hidden">
+        <div class="round-banner-content">
+            <div class="round-banner-big" id="round-banner-big">ROUND 1</div>
+            <div class="round-banner-sub" id="round-banner-sub"></div>
+        </div>
+    </div>
+
+    <div id="pause-overlay" class="overlay hidden">
+        <div class="pause-content">
+            <div class="pause-icon">II</div>
+            <div class="pause-label">PAUSED</div>
+            <p class="pause-by">Paused by <strong id="pause-by-name">someone</strong></p>
+            <div class="pause-timer" id="pause-timer">00:00</div>
+            <button id="btn-resume" class="btn btn-primary">Resume</button>
+            <p class="muted small center" id="pause-hint">Only the player who paused can resume in the first minute.</p>
+        </div>
+    </div>
+
+    <div id="menu-overlay" class="menu-overlay hidden">
+        <div class="menu-panel">
+            <div class="menu-header">
+                <div class="menu-title">Menu</div>
+                <button class="menu-close" data-close="menu-overlay">&times;</button>
+            </div>
+            <button id="menu-pause" class="menu-item">
+                <span class="menu-item-icon">II</span>
+                <span class="menu-item-label">Pause game</span>
+            </button>
+            <button id="menu-leaderboard" class="menu-item">
+                <span class="menu-item-icon">#</span>
+                <span class="menu-item-label">Leaderboard</span>
+            </button>
+            <button id="menu-achievements" class="menu-item">
+                <span class="menu-item-icon">★</span>
+                <span class="menu-item-label">Achievements</span>
+            </button>
+            <button id="menu-profile" class="menu-item">
+                <span class="menu-item-icon">^</span>
+                <span class="menu-item-label">Your progress</span>
+            </button>
+            <button id="menu-edit-profile" class="menu-item">
+                <span class="menu-item-icon">~</span>
+                <span class="menu-item-label">Edit profile</span>
+            </button>
+            <button id="menu-invite" class="menu-item">
+                <span class="menu-item-icon">&plus;</span>
+                <span class="menu-item-label">Copy invite link</span>
+            </button>
+            <button id="menu-leave" class="menu-item menu-item-danger">
+                <span class="menu-item-icon">&rarr;</span>
+                <span class="menu-item-label">Leave game</span>
+            </button>
+            <button id="menu-home" class="menu-item">
+                <span class="menu-item-icon">^</span>
+                <span class="menu-item-label">Home</span>
+            </button>
+            <div class="menu-divider"></div>
+            <button id="menu-online" class="menu-item">
+                <span class="menu-item-icon">@</span>
+                <span class="menu-item-label">Players online</span>
+                <span class="menu-item-badge" id="menu-online-badge">0</span>
+            </button>
+            <button id="menu-howto" class="menu-item">
+                <span class="menu-item-icon">?</span>
+                <span class="menu-item-label">How to play</span>
+            </button>
+            <div class="menu-divider"></div>
+            <button id="menu-settings" class="menu-item">
+                <span class="menu-item-icon">&#9881;</span>
+                <span class="menu-item-label">Settings</span>
+            </button>
+            <button id="menu-about" class="menu-item">
+                <span class="menu-item-icon">i</span>
+                <span class="menu-item-label">About</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- CHALLENGE GAME PICKER (opens when challenging a player) -->
+    <div id="challenge-game-modal" class="modal hidden">
+        <div class="modal-panel">
+            <button class="modal-close" data-close="challenge-game-modal">&times;</button>
+            <h1>Pick a game</h1>
+            <p class="muted small">Which game do you want to challenge <b id="challenge-target-name">them</b> to?</p>
+            <div class="challenge-game-picker">
+                <button class="challenge-game-btn" data-cg="guessduel">GuessDuel</button>
+                <button class="challenge-game-btn" data-cg="wordchain">WordChain</button>
+                <button class="challenge-game-btn" data-cg="timeshot">TimeShot</button>
+                <button class="challenge-game-btn" data-cg="geography">Geography</button>
+                <button class="challenge-game-btn" data-cg="trivia" disabled title="1v1 coming soon">TriviaRush</button>
+                <button class="challenge-game-btn" data-cg="footymind" disabled title="1v1 coming soon">FootyMind</button>
+            </div>
+            <button id="btn-challenge-game-send" class="btn btn-primary" disabled>Send challenge</button>
+        </div>
+    </div>
+
+    <!-- ONLINE PLAYERS MODAL -->
+    <div id="online-modal" class="modal hidden">
+        <div class="modal-panel" style="max-width: 480px;">
+            <button class="modal-close" data-close="online-modal">&times;</button>
+            <h1>Players online</h1>
+            <p class="muted small">Tap Challenge on anyone marked Free to start a 1v1.</p>
+            <div id="online-list" class="online-list">
+                <p class="muted small center" style="padding: 20px;">Loading...</p>
+            </div>
+            <button id="btn-online-refresh" class="btn btn-secondary" style="margin-top: 10px;">Refresh</button>
+        </div>
+    </div>
+
+    <!-- INCOMING CHALLENGE MODAL -->
+    <div id="incoming-challenge-modal" class="modal hidden">
+        <div class="modal-panel">
+            <div class="invite-mode-tag">CHALLENGE</div>
+            <h1 id="incoming-challenge-title">Someone challenges you!</h1>
+            <p class="muted" id="incoming-challenge-blurb">They want to play a 1v1.</p>
+            <p class="muted small" id="incoming-challenge-timer">Auto-declines in <span id="incoming-challenge-secs">30</span>s</p>
+            <div class="button-row" style="margin-top: 14px;">
+                <button id="btn-challenge-decline" class="btn btn-secondary">Decline</button>
+                <button id="btn-challenge-accept" class="btn btn-primary">Accept</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- EDIT PROFILE MODAL -->
+    <div id="edit-profile-modal" class="modal hidden">
+        <div class="modal-panel">
+            <button class="modal-close" data-close="edit-profile-modal">&times;</button>
+            <h1>Your profile</h1>
+            <p class="muted small">Change how others see you in challenges and online lists.</p>
+
+            <div class="edit-profile-avatar-row">
+                <div class="edit-profile-avatar" id="edit-profile-avatar-preview">A</div>
+                <div class="edit-profile-color-picker">
+                    <div class="muted small" style="margin-bottom: 6px;">Avatar</div>
+                    <div class="color-swatches">
+                        <button class="color-swatch" data-color="#c2e835" style="background: #c2e835;"></button>
+                        <button class="color-swatch" data-color="#ff6b6b" style="background: #ff6b6b;"></button>
+                        <button class="color-swatch" data-color="#ffd166" style="background: #ffd166;"></button>
+                        <button class="color-swatch" data-color="#4cc9f0" style="background: #4cc9f0;"></button>
+                        <button class="color-swatch" data-color="#a78bfa" style="background: #a78bfa;"></button>
+                        <button class="color-swatch" data-color="#06d6a0" style="background: #06d6a0;"></button>
+                        <button class="color-swatch" data-color="#f78ba0" style="background: #f78ba0;"></button>
+                        <button class="color-swatch" data-color="#a3a3a3" style="background: #a3a3a3;"></button>
+                    </div>
+                    <div class="avatar-image-row">
+                        <input type="file" id="edit-profile-image-input" accept="image/*" style="display:none;">
+                        <button type="button" id="btn-upload-avatar" class="btn-small">Upload picture</button>
+                        <button type="button" id="btn-remove-avatar" class="btn-small btn-secondary" style="display:none;">Remove</button>
+                    </div>
+                </div>
+            </div>
+
+            <label>Display name</label>
+            <input type="text" id="edit-profile-name" maxlength="20" placeholder="Your name" autocomplete="off">
+            <p class="muted small">Two players can have the same display name — your unique ID below keeps your progress separate.</p>
+            <p class="muted small" id="edit-profile-error" style="color: #b04040; margin-top: 4px; display: none;"></p>
+
+            <label>Your unique ID</label>
+            <div class="edit-profile-id-row">
+                <code class="edit-profile-id" id="edit-profile-id">u_------</code>
+                <button class="btn-small" id="btn-copy-profile-id">Copy</button>
+            </div>
+            <p class="muted small">Stays the same even if you change your name. Share this if a friend wants to find you.</p>
+
+            <div class="button-row" style="margin-top: 16px;">
+                <button id="btn-edit-profile-cancel" class="btn btn-secondary">Cancel</button>
+                <button id="btn-edit-profile-save" class="btn btn-primary">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- HOW TO PLAY MODAL -->
+    <div id="howto-modal" class="modal hidden">
+        <div class="modal-panel">
+            <button class="modal-close" data-close="howto-modal">&times;</button>
+            <h1>How to play</h1>
+            <div class="howto-tabs">
+                <button class="howto-tab active" data-howto="guessduel">GuessDuel</button>
+                <button class="howto-tab" data-howto="wordchain">WordChain</button>
+                <button class="howto-tab" data-howto="oneshot">OneShot</button>
+                <button class="howto-tab" data-howto="footymind">FootyMind</button>
+                <button class="howto-tab" data-howto="trivia">TriviaRush</button>
+                <button class="howto-tab" data-howto="geo">Geography</button>
+            </div>
+            <div class="howto-content" id="howto-content"></div>
+        </div>
+    </div>
+
+    <div id="leaderboard-modal" class="modal hidden">
+        <div class="modal-panel">
+            <button class="modal-close" data-close="leaderboard-modal">&times;</button>
+            <h1>Leaderboard</h1>
+            <p class="muted small">Wins and games in this room.</p>
+            <div class="leaderboard" id="modal-leaderboard"></div>
+        </div>
+    </div>
+
+    <div id="achievements-modal" class="modal hidden">
+        <div class="modal-panel">
+            <button class="modal-close" data-close="achievements-modal">&times;</button>
+            <h1>Achievements</h1>
+            <p class="muted small">Unlock by playing. <span id="ach-progress">0 / 13</span> unlocked.</p>
+            <div class="achievements-list" id="achievements-list"></div>
+        </div>
+    </div>
+
+    <div id="progress-modal" class="modal hidden">
+        <div class="modal-panel">
+            <button class="modal-close" data-close="progress-modal">&times;</button>
+            <h1>Your progress</h1>
+            <div class="profile-card-modal" id="progress-summary"></div>
+            <div class="divider"></div>
+            <h2>Lifetime stats</h2>
+            <div class="lifetime-stats" id="lifetime-stats"></div>
+        </div>
+    </div>
+
+    <!-- INVITE MODAL — shown to the host while waiting for opponent/friends to join.
+         Blocks the screen so the code can't leak into other games. -->
+    <div id="invite-modal" class="modal hidden">
+        <div class="modal-panel invite-modal-panel">
+            <div class="invite-mode-tag" id="invite-mode-tag">1V1 FACE-OFF</div>
+            <h1 id="invite-modal-title">Waiting for opponent...</h1>
+            <p class="muted" id="invite-modal-subtitle">Share the code below with your friend.</p>
+            <div class="invite-code-big" id="invite-code-big">----</div>
+            <div class="invite-code-spinner" id="invite-spinner"></div>
+            <div class="button-row" style="margin-top: 14px;">
+                <button id="btn-invite-copy" class="btn btn-secondary">Copy link</button>
+                <button id="btn-invite-share" class="btn btn-primary">Share</button>
+            </div>
+            <button id="btn-invite-cancel" class="btn btn-danger" style="margin-top: 10px;">Cancel game</button>
+            <p class="muted small center" style="margin-top: 8px;" id="invite-modal-foot">
+                Leaving this screen will end the game.
+            </p>
+        </div>
+    </div>
+
+    <div id="leave-modal" class="modal hidden">
+        <div class="modal-panel">
+            <h1>Leave the game?</h1>
+            <p class="muted" id="leave-modal-blurb">You will be returned to the home screen.</p>
+            <p class="muted small" id="leave-modal-penalty" style="color: #b04040; margin-top: 8px; display: none;">
+                ⚠️ This counts as a loss. Your opponent wins by forfeit.
+            </p>
+            <div class="button-row">
+                <button id="btn-leave-cancel" class="btn btn-secondary">Stay</button>
+                <button id="btn-leave-confirm" class="btn btn-danger">Leave (forfeit)</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="about-modal" class="modal hidden">
+        <div class="modal-panel">
+            <button class="modal-close" data-close="about-modal">&times;</button>
+            <h1>About</h1>
+            <div class="about-section">
+                <h2>GameRoom</h2>
+                <p class="muted">
+                    A small collection of quick games to play with friends or solo.
+                    GuessDuel, WordChain, OneShot, FlagDuel, and MindMeld &mdash; all in one place.
+                    Same XP, same stats across all games.
+                </p>
+            </div>
+            <div class="divider"></div>
+            <div class="about-section">
+                <h2>Built by</h2>
+                <p class="about-author">Akinrinsola Agbelusi</p>
+                <p class="muted small about-bio">
+                    Builder and tinkerer. I make small tools and games for the fun of
+                    solving problems. Always happy to ship something rough today
+                    rather than something perfect never.
+                </p>
+                <div class="about-links">
+                    <a href="https://github.com/Berry-szn" target="_blank" rel="noopener" class="about-link">
+                        <span class="link-icon">&gt;</span>
+                        <span>github.com/Berry-szn</span>
+                    </a>
+                    <a href="mailto:berrygists@gmail.com" class="about-link">
+                        <span class="link-icon">@</span>
+                        <span>berrygists@gmail.com</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="settings-modal" class="modal hidden">
+        <div class="modal-panel">
+            <button class="modal-close" data-close="settings-modal">&times;</button>
+            <h1>Settings</h1>
+            <h2>Theme</h2>
+            <div class="theme-picker">
+                <button class="theme-card active" data-theme="default">
+                    <div class="theme-swatch theme-swatch-default">
+                        <span class="sw sw-1"></span><span class="sw sw-2"></span><span class="sw sw-3"></span>
+                    </div>
+                    <div class="theme-name">Default</div>
+                </button>
+                <button class="theme-card" data-theme="bold">
+                    <div class="theme-swatch theme-swatch-bold">
+                        <span class="sw sw-1"></span><span class="sw sw-2"></span><span class="sw sw-3"></span>
+                    </div>
+                    <div class="theme-name">Bold</div>
+                </button>
+            </div>
+            <div class="divider"></div>
+            <h2>Sound</h2>
+            <div class="setting-row">
+                <div>
+                    <div class="setting-title">Sound effects</div>
+                    <div class="setting-desc muted small">Clicks, ticks, win chord</div>
+                </div>
+                <button id="toggle-sound" class="toggle"><span class="toggle-knob"></span></button>
+            </div>
+            <div class="setting-row">
+                <div>
+                    <div class="setting-title">Timer urgency beep</div>
+                    <div class="setting-desc muted small">Beep on each second under 5s</div>
+                </div>
+                <button id="toggle-tick" class="toggle"><span class="toggle-knob"></span></button>
+            </div>
+            <div class="divider"></div>
+            <h2>Data</h2>
+            <button id="btn-reset-lb" class="btn btn-secondary">Reset room leaderboard</button>
+        </div>
+    </div>
+
+    <div id="toast-container"></div>
+    <canvas id="confetti-canvas"></canvas>
+
+    <script>
+        window.INITIAL_ROOM_CODE = "{{ room_code or '' }}";
+        window.INITIAL_MATCH_CODE = "{{ match_code or '' }}";
+    </script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='app.js') }}?v=25"></script>
+</body>
+</html>
