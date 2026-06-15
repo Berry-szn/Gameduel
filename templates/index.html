@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#ffffff">
     <title>GameRoom</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=25">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=32">
 </head>
 <body data-theme="default">
 
@@ -177,6 +177,35 @@
                         </div>
                         <div class="game-card-title">TimeShot</div>
                         <div class="game-card-desc">Stop the hidden clock. Closest to target wins. Solo, face-off, group.</div>
+                    </button>
+                    <button class="game-card" data-game="halfit">
+                        <div class="game-card-art game-art-halfit">
+                            <svg viewBox="0 0 100 70" width="100%" height="100%" style="display:block">
+                                <ellipse cx="50" cy="35" rx="36" ry="20" fill="#f5d76e" stroke="#0f0f10" stroke-width="2"/>
+                                <line x1="20" y1="20" x2="80" y2="50" stroke="#0f0f10" stroke-width="2.5" stroke-dasharray="4 3"/>
+                            </svg>
+                        </div>
+                        <div class="game-card-title">HalfIt</div>
+                        <div class="game-card-desc">Slice the shape — cut exact halves or hit a target weight. Solo, face-off, group.</div>
+                    </button>
+                    <button class="game-card" data-game="angle">
+                        <div class="game-card-art game-art-angle">
+                            <svg viewBox="0 0 100 70" width="100%" height="100%" style="display:block">
+                                <path d="M 12 58 A 46 46 0 0 1 88 58" fill="none" stroke="#0f0f10" stroke-width="2"/>
+                                <line x1="50" y1="58" x2="88" y2="58" stroke="#0f0f10" stroke-width="2"/>
+                                <line x1="50" y1="58" x2="74" y2="26" stroke="#e44b4b" stroke-width="3"/>
+                                <circle cx="50" cy="58" r="4" fill="#0f0f10"/>
+                            </svg>
+                        </div>
+                        <div class="game-card-title">Angle</div>
+                        <div class="game-card-desc">Drag the arm to match the target angle. Closest wins. Solo, face-off, group.</div>
+                    </button>
+                    <button class="game-card" data-game="pictionary">
+                        <div class="game-card-art game-art-pict">
+                            <span class="pict-card-emoji">🐝🍃</span>
+                        </div>
+                        <div class="game-card-title">Pictionary</div>
+                        <div class="game-card-desc">Crack the emoji riddle — guess the word or phrase. Hints available. Solo, face-off, group.</div>
                     </button>
                 </div>
             </div>
@@ -1154,6 +1183,228 @@
 
     </main>
 
+    <!-- HALFIT — slicing game -->
+    <section id="screen-halfit-round" class="screen">
+        <div class="row-between">
+            <div class="muted small">
+                Round <span id="halfit-round-num">1</span> of <span id="halfit-total-rounds">5</span>
+            </div>
+            <button class="btn btn-ghost-small" data-leave>Leave</button>
+        </div>
+        <div class="halfit-mode-strip" id="halfit-mode-strip">Cut equal halves</div>
+        <div class="halfit-stat-row">
+            <div class="halfit-stat">
+                <div class="halfit-stat-label">Total</div>
+                <div class="halfit-stat-val" id="halfit-total-mass">100g</div>
+            </div>
+            <div class="halfit-stat halfit-target-stat hidden" id="halfit-target-block">
+                <div class="halfit-stat-label">Cut off</div>
+                <div class="halfit-stat-val halfit-target-val" id="halfit-target-mass">30g</div>
+            </div>
+            <div class="halfit-stat">
+                <div class="halfit-stat-label">Time</div>
+                <div class="halfit-stat-val" id="halfit-timer">25</div>
+            </div>
+        </div>
+        <div class="halfit-canvas-wrap">
+            <canvas id="halfit-canvas" width="400" height="300"></canvas>
+            <div class="halfit-hint" id="halfit-hint">Tap to place first point</div>
+        </div>
+        <div class="halfit-actions">
+            <button id="halfit-undo" class="btn btn-secondary" disabled>Reset line</button>
+            <button id="halfit-submit" class="btn btn-primary" disabled>Submit cut</button>
+        </div>
+        <div class="halfit-status muted small" id="halfit-status"></div>
+    </section>
+
+    <section id="screen-halfit-round-end" class="screen">
+        <h2 class="center">Round <span id="halfit-end-round-num">1</span> result</h2>
+        <div class="halfit-result-canvas-wrap">
+            <canvas id="halfit-result-canvas" width="400" height="300"></canvas>
+        </div>
+        <div class="halfit-result-summary" id="halfit-result-summary">
+            <!-- filled by JS -->
+        </div>
+        <div class="halfit-leaderboard" id="halfit-leaderboard">
+            <!-- per-player totals -->
+        </div>
+        <div class="muted small center" id="halfit-next-blurb">Next round soon...</div>
+    </section>
+
+    <section id="screen-halfit-game-over" class="screen">
+        <h2 class="center" id="halfit-go-headline">Match complete</h2>
+        <div class="halfit-final-stamp" id="halfit-final-stamp">SURGEON</div>
+        <div class="halfit-final-rank" id="halfit-final-rank">
+            <!-- final standings -->
+        </div>
+        <div class="button-row">
+            <button id="halfit-rematch" class="btn btn-primary">Play again</button>
+            <button id="halfit-home" class="btn btn-secondary" data-back="screen-home">Home</button>
+        </div>
+    </section>
+
+    <!-- ANGLE — settings/intro -->
+    <section id="screen-angle-intro" class="screen">
+        <div class="card">
+            <button class="back-link" data-back="screen-home">&larr; Back</button>
+            <h1 class="center">Angle</h1>
+            <p class="muted center">A target angle appears. Drag the arm to match it by eye — no numbers to help you. Closest to the target wins.</p>
+
+            <label>Difficulty</label>
+            <div class="segmented">
+                <button class="seg-btn active" data-anglediff="easy">Easy</button>
+                <button class="seg-btn" data-anglediff="medium">Medium</button>
+                <button class="seg-btn" data-anglediff="hard">Hard</button>
+            </div>
+            <p class="muted small" id="angle-diff-desc">Easy: angles are round numbers (multiples of 10°).</p>
+
+            <label>Rounds</label>
+            <div class="segmented">
+                <button class="seg-btn" data-anglerounds="3">3</button>
+                <button class="seg-btn active" data-anglerounds="5">5</button>
+                <button class="seg-btn" data-anglerounds="7">7</button>
+                <button class="seg-btn" data-anglerounds="10">10</button>
+            </div>
+
+            <button id="angle-start-game" class="btn btn-primary" style="margin-top: 14px;">Start Angle</button>
+        </div>
+    </section>
+
+    <!-- ANGLE — protractor game -->
+    <section id="screen-angle-round" class="screen">
+        <div class="row-between">
+            <div class="muted small">
+                Round <span id="angle-round-num">1</span> of <span id="angle-total-rounds">5</span>
+            </div>
+            <button class="btn btn-ghost-small" data-leave>Leave</button>
+        </div>
+        <div class="angle-target-banner">
+            Set the arm to <span class="angle-target-deg" id="angle-target-deg">50&deg;</span>
+        </div>
+        <div class="angle-stat-row">
+            <div class="angle-stat">
+                <div class="angle-stat-label">Your arm</div>
+                <div class="angle-stat-val" id="angle-current-val">— set it —</div>
+            </div>
+            <div class="angle-stat">
+                <div class="angle-stat-label">Time</div>
+                <div class="angle-stat-val" id="angle-timer">20</div>
+            </div>
+        </div>
+        <div class="angle-canvas-wrap">
+            <canvas id="angle-canvas" width="400" height="240"></canvas>
+            <div class="angle-hint" id="angle-hint">Drag the arm to set your angle</div>
+        </div>
+        <div class="angle-actions">
+            <button id="angle-submit" class="btn btn-primary">Lock in angle</button>
+        </div>
+        <div class="angle-status muted small" id="angle-status"></div>
+    </section>
+
+    <section id="screen-angle-round-end" class="screen">
+        <h2 class="center">Round <span id="angle-end-round-num">1</span> result</h2>
+        <div class="angle-result-canvas-wrap">
+            <canvas id="angle-result-canvas" width="400" height="240"></canvas>
+        </div>
+        <div class="angle-result-summary" id="angle-result-summary"></div>
+        <div class="angle-leaderboard" id="angle-leaderboard"></div>
+        <div class="muted small center" id="angle-next-blurb">Next round soon...</div>
+    </section>
+
+    <section id="screen-angle-game-over" class="screen">
+        <h2 class="center" id="angle-go-headline">Match complete</h2>
+        <div class="angle-final-stamp" id="angle-final-stamp">SHARP</div>
+        <div class="angle-final-rank" id="angle-final-rank"></div>
+        <div class="button-row">
+            <button id="angle-rematch" class="btn btn-primary">Play again</button>
+            <button id="angle-home" class="btn btn-secondary" data-back="screen-home">Home</button>
+        </div>
+    </section>
+
+    <!-- PICTIONARY — settings/intro -->
+    <section id="screen-pict-intro" class="screen">
+        <div class="card">
+            <button class="back-link" data-back="screen-home">&larr; Back</button>
+            <h1 class="center">Pictionary</h1>
+            <p class="muted center">Crack the emoji riddle — guess the word or phrase. Use up to 3 hints per round (they cost points). Fastest correct answer scores highest.</p>
+
+            <label>Difficulty</label>
+            <div class="segmented">
+                <button class="seg-btn active" data-pictdiff="easy">Easy</button>
+                <button class="seg-btn" data-pictdiff="medium">Medium</button>
+                <button class="seg-btn" data-pictdiff="hard">Hard</button>
+                <button class="seg-btn" data-pictdiff="mixed">Mixed</button>
+            </div>
+            <p class="muted small" id="pict-diff-desc">Easy: single words (rainbow, popcorn, sunflower).</p>
+
+            <label>Rounds</label>
+            <div class="segmented">
+                <button class="seg-btn" data-pictrounds="3">3</button>
+                <button class="seg-btn active" data-pictrounds="5">5</button>
+                <button class="seg-btn" data-pictrounds="7">7</button>
+                <button class="seg-btn" data-pictrounds="10">10</button>
+            </div>
+
+            <button id="pict-start-game" class="btn btn-primary" style="margin-top: 14px;">Start Pictionary</button>
+        </div>
+    </section>
+
+    <!-- PICTIONARY — emoji rebus guessing -->
+    <section id="screen-pict-round" class="screen">
+        <div class="row-between">
+            <div class="muted small">
+                Round <span id="pict-round-num">1</span> of <span id="pict-total-rounds">5</span>
+            </div>
+            <button class="btn btn-ghost-small" data-leave>Leave</button>
+        </div>
+        <div class="pict-puzzle-card">
+            <div class="pict-emoji" id="pict-emoji">🐝🍃</div>
+            <div class="pict-meta">
+                <span id="pict-category">word</span> ·
+                <span id="pict-wordcount">1 word</span>
+            </div>
+        </div>
+        <div class="pict-timer-row">
+            <span class="muted small">Time left</span>
+            <span class="pict-timer" id="pict-timer">40</span>
+        </div>
+        <div class="pict-guess-row">
+            <input type="text" id="pict-guess-input" placeholder="Type your guess..."
+                   autocomplete="off" maxlength="100">
+            <button id="pict-guess-btn" class="btn btn-primary">Guess</button>
+        </div>
+        <div class="pict-feedback" id="pict-feedback"></div>
+        <div class="pict-hint-area">
+            <button id="pict-hint-btn" class="btn btn-secondary">
+                Use a hint (<span id="pict-hints-left">3</span> left)
+            </button>
+            <div class="pict-hints-shown" id="pict-hints-shown"></div>
+        </div>
+        <div class="pict-solved-status muted small" id="pict-solved-status"></div>
+        <div class="pict-scoreboard" id="pict-scoreboard"></div>
+    </section>
+
+    <section id="screen-pict-round-end" class="screen">
+        <h2 class="center">Round <span id="pict-end-round-num">1</span></h2>
+        <div class="pict-reveal-card">
+            <div class="pict-emoji" id="pict-reveal-emoji">🐝🍃</div>
+            <div class="pict-reveal-answer">Answer: <strong id="pict-reveal-answer">believe</strong></div>
+        </div>
+        <div class="pict-round-results" id="pict-round-results"></div>
+        <div class="pict-scoreboard" id="pict-scoreboard-end"></div>
+        <div class="muted small center" id="pict-next-blurb">Next round soon...</div>
+    </section>
+
+    <section id="screen-pict-game-over" class="screen">
+        <h2 class="center" id="pict-go-headline">Match complete</h2>
+        <div class="pict-final-stamp" id="pict-final-stamp">🏆</div>
+        <div class="pict-final-rank" id="pict-final-rank"></div>
+        <div class="button-row">
+            <button id="pict-rematch" class="btn btn-primary">Play again</button>
+            <button id="pict-home" class="btn btn-secondary" data-back="screen-home">Home</button>
+        </div>
+    </section>
+
     <!-- OVERLAYS -->
     <div id="crack-overlay" class="overlay hidden">
         <div class="crack-content">
@@ -1252,6 +1503,9 @@
                 <button class="challenge-game-btn" data-cg="wordchain">WordChain</button>
                 <button class="challenge-game-btn" data-cg="timeshot">TimeShot</button>
                 <button class="challenge-game-btn" data-cg="geography">Geography</button>
+                <button class="challenge-game-btn" data-cg="halfit">HalfIt</button>
+                <button class="challenge-game-btn" data-cg="angle">Angle</button>
+                <button class="challenge-game-btn" data-cg="pictionary">Pictionary</button>
                 <button class="challenge-game-btn" data-cg="trivia" disabled title="1v1 coming soon">TriviaRush</button>
                 <button class="challenge-game-btn" data-cg="footymind" disabled title="1v1 coming soon">FootyMind</button>
             </div>
@@ -1498,6 +1752,6 @@
         window.INITIAL_MATCH_CODE = "{{ match_code or '' }}";
     </script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="{{ url_for('static', filename='app.js') }}?v=25"></script>
+    <script src="{{ url_for('static', filename='app.js') }}?v=32"></script>
 </body>
 </html>

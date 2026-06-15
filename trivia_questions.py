@@ -756,6 +756,25 @@ def total_count() -> int:
     return len(QUESTIONS)
 
 
+# --- Admin content integration ---
+# server.py calls refresh_admin_content() on boot and whenever the owner adds
+# or deletes trivia via /admin. We keep the built-in questions as a permanent
+# baseline and append admin items on top. Re-callable: it rebuilds the admin
+# slice each time without duplicating.
+_BUILTIN_COUNT = len(QUESTIONS)
+
+def refresh_admin_content():
+    """Re-sync QUESTIONS = builtin + current admin items. Safe to call often."""
+    global QUESTIONS
+    try:
+        import admin_content
+        # Reset to the built-in baseline, then merge admin items.
+        builtin = QUESTIONS[:_BUILTIN_COUNT]
+        QUESTIONS = admin_content.merged_trivia(builtin)
+    except Exception as e:
+        print(f"[trivia] refresh_admin_content failed: {e}")
+
+
 def category_counts() -> dict:
     counts = {}
     for q in QUESTIONS:

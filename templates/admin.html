@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>GameRoom Admin</title>
+<style>
+  :root{
+    --bg:#ffffff; --text:#0f0f10; --muted:#4a5260;
+    --gray-50:#f6f7f9; --gray-100:#eef0f3; --gray-200:#d9dde3; --gray-300:#c2c8d2;
+    --primary:#1f5fff; --primary-dark:#1748cc; --primary-soft:#e8f0ff;
+    --accent:#c8e020; --danger:#d4351c; --danger-soft:#fdecea; --success:#198754;
+    --card-border:#eef0f3; --radius:14px; --radius-sm:9px;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--gray-50); color:var(--text); line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:760px; margin:0 auto; padding:20px 16px 80px;}
+  h1{font-size:24px; margin:0 0 4px;}
+  h2{font-size:17px; margin:0 0 12px;}
+  .sub{color:var(--muted); font-size:14px; margin:0 0 20px;}
+  .card{
+    background:#fff; border:1px solid var(--card-border); border-radius:var(--radius);
+    padding:18px; margin-bottom:16px;
+  }
+  label{display:block; font-size:13px; font-weight:600; margin:12px 0 5px;}
+  input[type=text], input[type=password], textarea, select{
+    width:100%; padding:10px 12px; border:1.5px solid var(--gray-200);
+    border-radius:var(--radius-sm); font-size:15px; color:var(--text); background:#fff;
+    font-family:inherit;
+  }
+  input:focus, textarea:focus, select:focus{outline:none; border-color:var(--primary);}
+  textarea{resize:vertical; min-height:54px;}
+  .btn{
+    border:none; border-radius:var(--radius-sm); padding:11px 18px; font-size:15px;
+    font-weight:600; cursor:pointer; font-family:inherit;
+  }
+  .btn-primary{background:var(--primary); color:#fff;}
+  .btn-primary:hover{background:var(--primary-dark);}
+  .btn-ghost{background:var(--gray-100); color:var(--text);}
+  .btn-danger{background:var(--danger-soft); color:var(--danger); padding:6px 11px; font-size:13px;}
+  .btn-sm{padding:7px 12px; font-size:13px;}
+  .row{display:flex; gap:10px; flex-wrap:wrap;}
+  .row > *{flex:1; min-width:120px;}
+  .hidden{display:none !important;}
+  .tabs{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px;}
+  .tab{
+    padding:9px 15px; border-radius:999px; border:1.5px solid var(--gray-200);
+    background:#fff; cursor:pointer; font-size:14px; font-weight:600; color:var(--muted);
+  }
+  .tab.active{background:var(--primary); color:#fff; border-color:var(--primary);}
+  .tab .count{opacity:.7; font-weight:400; margin-left:4px;}
+  .msg{padding:10px 14px; border-radius:var(--radius-sm); margin:12px 0; font-size:14px; display:none;}
+  .msg.ok{background:#e9f7ef; color:var(--success); display:block;}
+  .msg.err{background:var(--danger-soft); color:var(--danger); display:block;}
+  .item{
+    display:flex; justify-content:space-between; align-items:center; gap:10px;
+    padding:10px 12px; border:1px solid var(--card-border); border-radius:var(--radius-sm);
+    margin-bottom:7px; background:var(--gray-50);
+  }
+  .item-main{font-size:14px; min-width:0; overflow:hidden;}
+  .item-main .t{font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .item-main .s{color:var(--muted); font-size:12px; margin-top:2px;}
+  .item-thumb{width:42px; height:30px; object-fit:cover; border-radius:4px; flex-shrink:0; border:1px solid var(--gray-200);}
+  .pathrow{display:flex; gap:8px; margin-bottom:6px;}
+  .pathrow input{flex:1;}
+  .pathrow button{flex:0 0 auto;}
+  .hint{font-size:12px; color:var(--muted); margin-top:4px;}
+  .imgtest{margin-top:8px; display:flex; align-items:center; gap:10px;}
+  .imgtest img{width:80px; height:54px; object-fit:cover; border-radius:6px; border:1px solid var(--gray-200); display:none;}
+  .imgtest .status{font-size:13px;}
+  .toolbar{display:flex; justify-content:space-between; align-items:center; margin-bottom:18px;}
+  .opt-row{display:flex; gap:8px; align-items:center; margin-bottom:6px;}
+  .opt-row input[type=text]{flex:1;}
+  .opt-row input[type=radio]{flex:0 0 auto; width:auto;}
+  .opt-row .rlabel{font-size:12px; color:var(--muted); flex:0 0 auto;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- LOGIN -->
+  <div id="login-view" class="hidden">
+    <h1>GameRoom Admin</h1>
+    <p class="sub">Enter the admin password to manage game content.</p>
+    <div class="card">
+      <label for="pw">Password</label>
+      <input type="password" id="pw" placeholder="Admin password" autocomplete="current-password">
+      <div id="login-msg" class="msg"></div>
+      <button class="btn btn-primary" id="login-btn" style="margin-top:14px;">Log in</button>
+    </div>
+  </div>
+
+  <!-- DISABLED -->
+  <div id="disabled-view" class="hidden">
+    <h1>Admin disabled</h1>
+    <p class="sub">Set the <code>ADMIN_PASSWORD</code> environment variable in Render, then redeploy to enable this panel.</p>
+  </div>
+
+  <!-- PANEL -->
+  <div id="panel-view" class="hidden">
+    <div class="toolbar">
+      <div>
+        <h1>Content Manager</h1>
+        <p class="sub" style="margin:0;">Add content to your games. Saves instantly &amp; persists.</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="logout-btn">Log out</button>
+    </div>
+
+    <div class="tabs" id="tabs">
+      <div class="tab active" data-tab="trivia">Trivia<span class="count" id="c-trivia"></span></div>
+      <div class="tab" data-tab="pictionary">Pictionary<span class="count" id="c-pictionary"></span></div>
+      <div class="tab" data-tab="footy">FootyMind<span class="count" id="c-footy"></span></div>
+      <div class="tab" data-tab="geo">Geography<span class="count" id="c-geo"></span></div>
+    </div>
+
+    <div id="global-msg" class="msg"></div>
+
+    <!-- TRIVIA -->
+    <section class="tabpane" data-pane="trivia">
+      <div class="card">
+        <h2>Add a trivia question</h2>
+        <div class="row">
+          <div>
+            <label>Category</label>
+            <select id="tr-cat">
+              <option value="football">Football</option>
+              <option value="geography">Geography</option>
+              <option value="science">Science</option>
+              <option value="movies">Movies</option>
+              <option value="music">Music</option>
+              <option value="history">History</option>
+              <option value="pop">Pop Culture</option>
+            </select>
+          </div>
+          <div>
+            <label>Type</label>
+            <select id="tr-type">
+              <option value="mc">Multiple choice</option>
+              <option value="tf">True / False</option>
+            </select>
+          </div>
+        </div>
+        <label>Question</label>
+        <textarea id="tr-q" placeholder="e.g. Which planet is the largest in our solar system?"></textarea>
+
+        <div id="tr-mc-block">
+          <label>Options (select the correct one)</label>
+          <div class="opt-row"><input type="radio" name="tr-correct" value="0" checked><input type="text" class="tr-opt" placeholder="Option 1"></div>
+          <div class="opt-row"><input type="radio" name="tr-correct" value="1"><input type="text" class="tr-opt" placeholder="Option 2"></div>
+          <div class="opt-row"><input type="radio" name="tr-correct" value="2"><input type="text" class="tr-opt" placeholder="Option 3 (optional)"></div>
+          <div class="opt-row"><input type="radio" name="tr-correct" value="3"><input type="text" class="tr-opt" placeholder="Option 4 (optional)"></div>
+        </div>
+
+        <div id="tr-tf-block" class="hidden">
+          <label>Correct answer</label>
+          <select id="tr-tf-answer">
+            <option value="true">True</option>
+            <option value="false">False</option>
+          </select>
+        </div>
+
+        <label>Explanation (optional, shown after answering)</label>
+        <input type="text" id="tr-explain" placeholder="e.g. Jupiter is 11x Earth's diameter">
+        <button class="btn btn-primary" id="tr-add" style="margin-top:14px;">Add question</button>
+      </div>
+      <div class="card">
+        <h2>Your added trivia (<span id="tr-list-count">0</span>)</h2>
+        <div id="tr-list"></div>
+      </div>
+    </section>
+
+    <!-- PICTIONARY -->
+    <section class="tabpane hidden" data-pane="pictionary">
+      <div class="card">
+        <h2>Add a pictionary puzzle</h2>
+        <p class="hint">An emoji riddle — the player guesses the word/phrase. e.g. 🐝🍃 → "believe".</p>
+        <label>Emoji clue</label>
+        <input type="text" id="pi-emoji" placeholder="🐝🍃">
+        <label>Answer</label>
+        <input type="text" id="pi-answer" placeholder="believe">
+        <div class="row">
+          <div>
+            <label>Category</label>
+            <select id="pi-cat">
+              <option value="word">Word</option>
+              <option value="phrase">Phrase</option>
+              <option value="thing">Thing</option>
+              <option value="movie-ish">Movie / title</option>
+            </select>
+          </div>
+          <div>
+            <label>Accepted alternates (comma-separated, optional)</label>
+            <input type="text" id="pi-alts" placeholder="beleive, belief">
+          </div>
+        </div>
+        <button class="btn btn-primary" id="pi-add" style="margin-top:14px;">Add puzzle</button>
+      </div>
+      <div class="card">
+        <h2>Your added puzzles (<span id="pi-list-count">0</span>)</h2>
+        <div id="pi-list"></div>
+      </div>
+    </section>
+
+    <!-- FOOTY -->
+    <section class="tabpane hidden" data-pane="footy">
+      <div class="card">
+        <h2>Add a footballer</h2>
+        <p class="hint">Players guess the footballer from their career path (clubs &amp; years).</p>
+        <label>Player name</label>
+        <input type="text" id="fo-name" placeholder="Lionel Messi">
+        <div class="row">
+          <div>
+            <label>Nationality</label>
+            <input type="text" id="fo-nat" placeholder="Argentina">
+          </div>
+          <div>
+            <label>Position</label>
+            <input type="text" id="fo-pos" placeholder="Forward">
+          </div>
+          <div>
+            <label>Difficulty</label>
+            <select id="fo-diff">
+              <option value="easy">Easy</option>
+              <option value="medium" selected>Medium</option>
+              <option value="hard">Hard</option>
+            </select>
+          </div>
+        </div>
+        <label>Other accepted names (comma-separated, optional)</label>
+        <input type="text" id="fo-aliases" placeholder="messi, leo messi, la pulga">
+        <label>Career path (years &amp; club)</label>
+        <div id="fo-paths">
+          <div class="pathrow">
+            <input type="text" class="fo-years" placeholder="2004-2021">
+            <input type="text" class="fo-club" placeholder="Barcelona">
+            <button class="btn btn-ghost btn-sm fo-rm" type="button">✕</button>
+          </div>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="fo-add-step" type="button">+ Add career step</button>
+        <br>
+        <button class="btn btn-primary" id="fo-add" style="margin-top:14px;">Add player</button>
+      </div>
+      <div class="card">
+        <h2>Your added players (<span id="fo-list-count">0</span>)</h2>
+        <div id="fo-list"></div>
+      </div>
+    </section>
+
+    <!-- GEOGRAPHY -->
+    <section class="tabpane hidden" data-pane="geo">
+      <div class="card">
+        <h2>Add a flag</h2>
+        <p class="hint">Use a 2-letter country code for automatic flag images, OR paste a direct image URL.</p>
+        <label>Country / entity name</label>
+        <input type="text" id="gf-name" placeholder="Japan">
+        <div class="row">
+          <div>
+            <label>ISO2 code (e.g. jp, us, gb) — preferred</label>
+            <input type="text" id="gf-iso" placeholder="jp" maxlength="2">
+          </div>
+          <div>
+            <label>Difficulty</label>
+            <select id="gf-diff">
+              <option value="easy">Easy</option>
+              <option value="medium" selected>Medium</option>
+              <option value="hard">Hard</option>
+            </select>
+          </div>
+        </div>
+        <label>…or direct image URL (if no ISO2 code)</label>
+        <input type="text" id="gf-url" placeholder="https://…/flag.png">
+        <div class="imgtest">
+          <button class="btn btn-ghost btn-sm" id="gf-test" type="button">Test image</button>
+          <img id="gf-test-img" alt="">
+          <span class="status" id="gf-test-status"></span>
+        </div>
+        <button class="btn btn-primary" id="gf-add" style="margin-top:14px;">Add flag</button>
+      </div>
+
+      <div class="card">
+        <h2>Add a landmark</h2>
+        <p class="hint">Players identify the landmark from its image.</p>
+        <label>Landmark name</label>
+        <input type="text" id="gl-name" placeholder="Eiffel Tower">
+        <div class="row">
+          <div>
+            <label>Country</label>
+            <input type="text" id="gl-country" placeholder="France">
+          </div>
+          <div>
+            <label>Difficulty</label>
+            <select id="gl-diff">
+              <option value="easy">Easy</option>
+              <option value="medium" selected>Medium</option>
+              <option value="hard">Hard</option>
+            </select>
+          </div>
+        </div>
+        <label>Image URL</label>
+        <input type="text" id="gl-url" placeholder="https://…/eiffel.jpg">
+        <div class="imgtest">
+          <button class="btn btn-ghost btn-sm" id="gl-test" type="button">Test image</button>
+          <img id="gl-test-img" alt="">
+          <span class="status" id="gl-test-status"></span>
+        </div>
+        <button class="btn btn-primary" id="gl-add" style="margin-top:14px;">Add landmark</button>
+      </div>
+
+      <div class="card">
+        <h2>Your added flags (<span id="gf-list-count">0</span>)</h2>
+        <div id="gf-list"></div>
+        <h2 style="margin-top:18px;">Your added landmarks (<span id="gl-list-count">0</span>)</h2>
+        <div id="gl-list"></div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+async function api(path, opts){
+  const r = await fetch(path, Object.assign({headers:{'Content-Type':'application/json'}}, opts||{}));
+  let data = {}; try{ data = await r.json(); }catch(e){}
+  return {status:r.status, data};
+}
+function flash(el, text, ok){
+  el.textContent = text; el.className = 'msg ' + (ok?'ok':'err');
+  if(ok) setTimeout(()=>{ el.className='msg'; }, 2500);
+}
+
+// ---------- auth / bootstrap ----------
+async function init(){
+  const {data} = await api('/api/admin/me');
+  if(!data.enabled){ show('disabled-view'); return; }
+  if(data.authed){ show('panel-view'); loadAll(); }
+  else { show('login-view'); }
+}
+function show(view){
+  ['login-view','disabled-view','panel-view'].forEach(v=>$(v).classList.toggle('hidden', v!==view));
+}
+$('login-btn').onclick = async ()=>{
+  const pw = $('pw').value;
+  if(!pw){ flash($('login-msg'),'Enter the password',false); return; }
+  const {status,data} = await api('/api/admin/login',{method:'POST',body:JSON.stringify({password:pw})});
+  if(status===200 && data.ok){ show('panel-view'); loadAll(); }
+  else { flash($('login-msg'), data.error||'Login failed', false); }
+};
+$('pw').addEventListener('keydown', e=>{ if(e.key==='Enter') $('login-btn').click(); });
+$('logout-btn').onclick = async ()=>{ await api('/api/admin/logout',{method:'POST'}); location.reload(); };
+
+// ---------- tabs ----------
+document.querySelectorAll('.tab').forEach(t=>{
+  t.onclick = ()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active', x===t));
+    const name = t.dataset.tab;
+    document.querySelectorAll('.tabpane').forEach(p=>p.classList.toggle('hidden', p.dataset.pane!==name));
+  };
+});
+
+// ---------- trivia type toggle ----------
+$('tr-type').onchange = ()=>{
+  const mc = $('tr-type').value==='mc';
+  $('tr-mc-block').classList.toggle('hidden', !mc);
+  $('tr-tf-block').classList.toggle('hidden', mc);
+};
+
+// ---------- generic list rendering ----------
+function renderList(containerId, countId, items, fmt, kind){
+  const c = $(containerId); c.innerHTML='';
+  $(countId).textContent = items.length;
+  if(items.length===0){ c.innerHTML = '<p class="hint">Nothing added yet.</p>'; return; }
+  items.slice().reverse().forEach(it=>{
+    const div = document.createElement('div'); div.className='item';
+    div.innerHTML = fmt(it);
+    const del = document.createElement('button');
+    del.className='btn btn-danger'; del.textContent='Delete';
+    del.onclick = async ()=>{
+      if(!confirm('Delete this item?')) return;
+      await api(`/api/admin/content/${kind}/${it.id}`,{method:'DELETE'});
+      loadAll();
+    };
+    div.appendChild(del);
+    c.appendChild(div);
+  });
+}
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
+
+// ---------- load everything ----------
+async function loadAll(){
+  const kinds = ['trivia','pictionary','footy','geo_flag','geo_landmark'];
+  const results = {};
+  for(const k of kinds){
+    const {data} = await api(`/api/admin/content/${k}`);
+    results[k] = (data && data.items) || [];
+    if(data && data.counts){
+      $('c-trivia').textContent = data.counts.trivia ? `(${data.counts.trivia})` : '';
+      $('c-pictionary').textContent = data.counts.pictionary ? `(${data.counts.pictionary})` : '';
+      $('c-footy').textContent = data.counts.footy ? `(${data.counts.footy})` : '';
+      const g = (data.counts.geo_flag||0)+(data.counts.geo_landmark||0);
+      $('c-geo').textContent = g ? `(${g})` : '';
+    }
+  }
+  renderList('tr-list','tr-list-count', results.trivia, it=>{
+    const ans = it.type==='mc' ? `Correct: ${esc((it.options||[])[it.answer])}` : `Answer: ${it.answer===true||it.answer==='true'?'True':'False'}`;
+    return `<div class="item-main"><div class="t">${esc(it.q)}</div><div class="s">${esc(it.cat)} · ${esc(it.type)} · ${ans}</div></div>`;
+  }, 'trivia');
+  renderList('pi-list','pi-list-count', results.pictionary, it=>
+    `<div class="item-main"><div class="t">${esc(it.emoji)} → ${esc(it.answer)}</div><div class="s">${esc(it.category)}</div></div>`
+  , 'pictionary');
+  renderList('fo-list','fo-list-count', results.footy, it=>{
+    const path = (it.path||[]).map(p=>`${esc(p[1])}`).join(' → ');
+    return `<div class="item-main"><div class="t">${esc(it.name)}</div><div class="s">${esc(it.nationality)} · ${esc(it.difficulty)} · ${path}</div></div>`;
+  }, 'footy');
+  renderList('gf-list','gf-list-count', results.geo_flag, it=>{
+    const url = it.iso2 ? `https://flagcdn.com/w320/${esc(it.iso2.toLowerCase())}.png` : esc(it.image_url);
+    return `<img class="item-thumb" src="${url}" onerror="this.style.display='none'"><div class="item-main"><div class="t">${esc(it.name)}</div><div class="s">${it.iso2?('ISO: '+esc(it.iso2)):'custom URL'} · ${esc(it.difficulty)}</div></div>`;
+  }, 'geo_flag');
+  renderList('gl-list','gl-list-count', results.geo_landmark, it=>
+    `<img class="item-thumb" src="${esc(it.image_url)}" onerror="this.style.display='none'"><div class="item-main"><div class="t">${esc(it.name)}</div><div class="s">${esc(it.country)} · ${esc(it.difficulty)}</div></div>`
+  , 'geo_landmark');
+}
+
+// ---------- add handlers ----------
+$('tr-add').onclick = async ()=>{
+  const type = $('tr-type').value;
+  const item = {cat:$('tr-cat').value, type, q:$('tr-q').value.trim(), explain:$('tr-explain').value.trim()};
+  if(!item.q){ flash($('global-msg'),'Question text is required',false); return; }
+  if(type==='mc'){
+    const opts = Array.from(document.querySelectorAll('.tr-opt')).map(i=>i.value.trim()).filter(Boolean);
+    if(opts.length<2){ flash($('global-msg'),'Need at least 2 options',false); return; }
+    const correctIdx = parseInt(document.querySelector('input[name=tr-correct]:checked').value);
+    const allOpts = Array.from(document.querySelectorAll('.tr-opt')).map(i=>i.value.trim());
+    if(!allOpts[correctIdx]){ flash($('global-msg'),'The selected correct option is empty',false); return; }
+    // compact to filled options, recompute correct index
+    const filled = []; let newCorrect = 0;
+    allOpts.forEach((o,i)=>{ if(o){ if(i===correctIdx) newCorrect=filled.length; filled.push(o);} });
+    item.options = filled; item.answer = newCorrect;
+  } else {
+    item.answer = $('tr-tf-answer').value === 'true';
+  }
+  const {status,data} = await api('/api/admin/content/trivia',{method:'POST',body:JSON.stringify(item)});
+  if(status===200){ flash($('global-msg'),'Question added ✓',true); $('tr-q').value=''; $('tr-explain').value=''; document.querySelectorAll('.tr-opt').forEach(i=>i.value=''); loadAll(); }
+  else flash($('global-msg'), data.error||'Failed', false);
+};
+
+$('pi-add').onclick = async ()=>{
+  const item = {emoji:$('pi-emoji').value.trim(), answer:$('pi-answer').value.trim(), category:$('pi-cat').value, alternates:$('pi-alts').value.trim()};
+  if(!item.emoji || !item.answer){ flash($('global-msg'),'Emoji and answer are required',false); return; }
+  const {status,data} = await api('/api/admin/content/pictionary',{method:'POST',body:JSON.stringify(item)});
+  if(status===200){ flash($('global-msg'),'Puzzle added ✓',true); $('pi-emoji').value=''; $('pi-answer').value=''; $('pi-alts').value=''; loadAll(); }
+  else flash($('global-msg'), data.error||'Failed', false);
+};
+
+// footy path rows
+$('fo-add-step').onclick = ()=>{
+  const row = document.createElement('div'); row.className='pathrow';
+  row.innerHTML = '<input type="text" class="fo-years" placeholder="2021-2023"><input type="text" class="fo-club" placeholder="Club name"><button class="btn btn-ghost btn-sm fo-rm" type="button">✕</button>';
+  $('fo-paths').appendChild(row);
+  row.querySelector('.fo-rm').onclick = ()=>row.remove();
+};
+document.querySelectorAll('.fo-rm').forEach(b=> b.onclick=()=>b.closest('.pathrow').remove());
+$('fo-add').onclick = async ()=>{
+  const name = $('fo-name').value.trim();
+  if(!name){ flash($('global-msg'),'Player name is required',false); return; }
+  const path = Array.from(document.querySelectorAll('#fo-paths .pathrow')).map(r=>{
+    return [r.querySelector('.fo-years').value.trim(), r.querySelector('.fo-club').value.trim()];
+  }).filter(p=>p[1]);
+  if(path.length<1){ flash($('global-msg'),'Add at least one career step',false); return; }
+  const item = {name, nationality:$('fo-nat').value.trim(), position:$('fo-pos').value.trim(),
+    difficulty:$('fo-diff').value, aliases:$('fo-aliases').value.trim(), path};
+  const {status,data} = await api('/api/admin/content/footy',{method:'POST',body:JSON.stringify(item)});
+  if(status===200){ flash($('global-msg'),'Player added ✓',true);
+    $('fo-name').value=''; $('fo-nat').value=''; $('fo-pos').value=''; $('fo-aliases').value='';
+    $('fo-paths').innerHTML='<div class="pathrow"><input type="text" class="fo-years" placeholder="2004-2021"><input type="text" class="fo-club" placeholder="Barcelona"><button class="btn btn-ghost btn-sm fo-rm" type="button">✕</button></div>';
+    document.querySelectorAll('.fo-rm').forEach(b=> b.onclick=()=>b.closest('.pathrow').remove());
+    loadAll();
+  } else flash($('global-msg'), data.error||'Failed', false);
+};
+
+// image load test
+function wireImgTest(btnId, urlGetter, imgId, statusId){
+  $(btnId).onclick = ()=>{
+    const url = urlGetter();
+    const img = $(imgId), st = $(statusId);
+    if(!url){ st.textContent='Enter a URL first'; st.style.color='var(--danger)'; img.style.display='none'; return; }
+    st.textContent='Loading…'; st.style.color='var(--muted)'; img.style.display='none';
+    const probe = new Image();
+    probe.onload = ()=>{ img.src=url; img.style.display='inline-block'; st.textContent='Loads ✓'; st.style.color='var(--success)'; };
+    probe.onerror = ()=>{ img.style.display='none'; st.textContent='Failed to load ✗'; st.style.color='var(--danger)'; };
+    probe.src = url;
+  };
+}
+wireImgTest('gf-test', ()=>{
+  const iso=$('gf-iso').value.trim(); const url=$('gf-url').value.trim();
+  return iso ? `https://flagcdn.com/w320/${iso.toLowerCase()}.png` : url;
+}, 'gf-test-img','gf-test-status');
+wireImgTest('gl-test', ()=>$('gl-url').value.trim(), 'gl-test-img','gl-test-status');
+
+$('gf-add').onclick = async ()=>{
+  const item = {name:$('gf-name').value.trim(), iso2:$('gf-iso').value.trim(), image_url:$('gf-url').value.trim(), difficulty:$('gf-diff').value};
+  if(!item.name){ flash($('global-msg'),'Country name is required',false); return; }
+  if(!item.iso2 && !item.image_url){ flash($('global-msg'),'Provide an ISO2 code or an image URL',false); return; }
+  const {status,data} = await api('/api/admin/content/geo_flag',{method:'POST',body:JSON.stringify(item)});
+  if(status===200){ flash($('global-msg'),'Flag added ✓',true); $('gf-name').value=''; $('gf-iso').value=''; $('gf-url').value=''; $('gf-test-img').style.display='none'; $('gf-test-status').textContent=''; loadAll(); }
+  else flash($('global-msg'), data.error||'Failed', false);
+};
+$('gl-add').onclick = async ()=>{
+  const item = {name:$('gl-name').value.trim(), country:$('gl-country').value.trim(), image_url:$('gl-url').value.trim(), difficulty:$('gl-diff').value};
+  if(!item.name){ flash($('global-msg'),'Landmark name is required',false); return; }
+  if(!item.image_url){ flash($('global-msg'),'Image URL is required',false); return; }
+  const {status,data} = await api('/api/admin/content/geo_landmark',{method:'POST',body:JSON.stringify(item)});
+  if(status===200){ flash($('global-msg'),'Landmark added ✓',true); $('gl-name').value=''; $('gl-country').value=''; $('gl-url').value=''; $('gl-test-img').style.display='none'; $('gl-test-status').textContent=''; loadAll(); }
+  else flash($('global-msg'), data.error||'Failed', false);
+};
+
+init();
+</script>
+</body>
+</html>

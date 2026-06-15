@@ -44,6 +44,8 @@ import time
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
+import storage as _storage
+
 from flask import Flask, jsonify, render_template, request, make_response
 from flask_socketio import SocketIO, emit, join_room as sio_join_room, leave_room as sio_leave_room
 
@@ -208,11 +210,8 @@ def title_for_level(level: int) -> str:
 def load_profiles():
     global PROFILES_CACHE
     try:
-        if os.path.exists(PROFILES_PATH):
-            with open(PROFILES_PATH, 'r', encoding='utf-8') as f:
-                PROFILES_CACHE = json.load(f)
-        else:
-            PROFILES_CACHE = {}
+        PROFILES_CACHE = _storage.load_profiles() or {}
+        print(f"[profiles] loaded {len(PROFILES_CACHE)} profiles from {_storage.backend_name()}")
     except Exception as e:
         print(f"[profiles] Failed to load: {e}. Starting fresh.")
         PROFILES_CACHE = {}
@@ -221,14 +220,12 @@ def load_profiles():
 def save_profiles():
     global PROFILES_DIRTY
     with PROFILES_LOCK:
-        try:
-            tmp = PROFILES_PATH + '.tmp'
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(PROFILES_CACHE, f, indent=2)
-            os.replace(tmp, PROFILES_PATH)
-            PROFILES_DIRTY = False
-        except Exception as e:
-            print(f"[profiles] Failed to save: {e}")
+        snapshot = dict(PROFILES_CACHE)
+    try:
+        _storage.save_profiles(snapshot)
+        PROFILES_DIRTY = False
+    except Exception as e:
+        print(f"[profiles] Failed to save: {e}")
 
 
 def get_profile(name: str, user_id: str = None) -> dict:
@@ -799,6 +796,9 @@ def build_state_snapshot(state: dict, code: str, for_sid: str) -> dict:
         'wordchain': state.get('wordchain'),
         'timeshot': state.get('timeshot'),
         'geo': state.get('geo'),
+        'halfit': state.get('halfit'),
+        'angle': state.get('angle'),
+        'pict': pict_public_state(state.get('pict')) if state.get('pict') else None,
         'match_history': state.get('match_history', [])[-10:],
         'me': {
             'sid': for_sid,
@@ -2150,6 +2150,62 @@ def on_disconnect():
             broadcast_state(state, code)
         touch_room(room)
 
+        # For LIVE real-time faceoff games, a disconnect shouldn't strand the
+        # opponent for 5 minutes. Schedule a SHORT grace; if the player hasn't
+        # reconnected, award the opponent the win. Captured here so the closure
+        # has the right game_type/phase even if state changes later.
+        rt_games = ('ts_round', 'ts_round_end', 'halfit_round', 'halfit_round_end',
+                    'angle_round', 'angle_round_end', 'pict_round', 'pict_round_end',
+                    'geo_round', 'geo_round_end')
+        is_rt_faceoff = (state.get('mode_hint') == 'faceoff'
+                         and state.get('phase') in rt_games)
+
+    if is_rt_faceoff:
+        def rt_forfeit_check():
+            socketio.sleep(25)   # ~25s to survive a brief wifi blip / reconnect
+            with room['lock']:
+                state = room['state']
+                gone = state['players'].get(sid)
+                # Only forfeit if they're still here AND still disconnected
+                if not gone or not gone.get('disconnected_at'):
+                    return
+                # Has the same user_id reconnected on a new sid? If so, abort.
+                leaver_uid = gone.get('user_id')
+                if leaver_uid:
+                    for osid, op in state['players'].items():
+                        if (osid != sid and op.get('user_id') == leaver_uid
+                                and op.get('disconnected_at') is None):
+                            return  # reconnected as a new sid; don't forfeit
+                # Still a live faceoff with exactly one connected opponent?
+                opponents = [pp for pp in state['players'].values()
+                             if not pp.get('is_bot') and pp.get('sid') != sid
+                             and pp.get('disconnected_at') is None]
+                gt = state.get('game_type', 'guessduel')
+                live_now = state.get('phase') in rt_games
+                if not (live_now and len(opponents) == 1):
+                    return
+                leaver_name = gone.get('name')
+                # Record the loss for the disconnected player
+                try:
+                    lp = get_profile(leaver_name, user_id=leaver_uid)
+                    lp['losses'] = (lp.get('losses', 0) or 0) + 1
+                    lp['games_played'] = (lp.get('games_played', 0) or 0) + 1
+                    lp['current_streak'] = 0
+                    mark_profiles_dirty()
+                except Exception as e:
+                    print(f"[rt-disconnect-forfeit] loss record failed: {e}")
+                # Award the win to the opponent using the right path per game.
+                if gt in ('angle', 'halfit', 'pictionary'):
+                    _generic_forfeit_win(room, state, code, sid, leaver_name,
+                                         opponents[0], gt)
+                else:
+                    # timeshot / geography: reuse their winner-population shape
+                    _generic_forfeit_win(room, state, code, sid, leaver_name,
+                                         opponents[0], gt)
+                print(f"[rt-disconnect-forfeit] {leaver_name} d/c'd in {code}; "
+                      f"{opponents[0]['name']} wins ({gt})")
+        socketio.start_background_task(rt_forfeit_check)
+
     def grace_check():
         # 5 minutes — enough for the host to switch to Telegram/WhatsApp to
         # share the invite link without losing their room.
@@ -2185,7 +2241,7 @@ def on_create_room(data=None):
     mode_hint = 'group'
     if data and isinstance(data, dict):
         gt = data.get('game_type')
-        if gt in ('guessduel', 'wordchain', 'timeshot', 'geography'):
+        if gt in ('guessduel', 'wordchain', 'timeshot', 'geography', 'halfit', 'angle', 'pictionary'):
             game_type = gt
         mh = data.get('mode_hint')
         if mh in ('faceoff', 'group', 'solo'):
@@ -2449,6 +2505,62 @@ def on_start_game(data):
             geo_init_match(state, mode, total_rounds, difficulty)
             touch_room(room)
             geo_start_round(room)
+            return
+
+        # HalfIt dispatch — works in solo, faceoff, or group mode
+        if state.get('game_type') == 'halfit':
+            hmode = data.get('halfit_mode', 'equal')
+            if hmode not in ('equal', 'target'):
+                hmode = 'equal'
+            hdiff = data.get('halfit_difficulty', 'easy')
+            if hdiff not in ('easy', 'medium', 'hard'):
+                hdiff = 'easy'
+            total_rounds = int(data.get('total_rounds', 5))
+            total_rounds = max(1, min(10, total_rounds))
+            # Allow solo (1 human) too — fine for practice
+            state['settings']['mode'] = state.get('mode_hint', 'solo')
+            state['last_start_args'] = {
+                'game_type': 'halfit', 'mode': state['settings']['mode'],
+                'halfit_mode': hmode, 'halfit_difficulty': hdiff,
+                'total_rounds': total_rounds
+            }
+            halfit_init_match(state, hmode, hdiff, total_rounds)
+            touch_room(room)
+            halfit_start_round(room)
+            return
+
+        # Angle dispatch — works in solo, faceoff, or group mode
+        if state.get('game_type') == 'angle':
+            adiff = data.get('angle_difficulty', 'easy')
+            if adiff not in ('easy', 'medium', 'hard'):
+                adiff = 'easy'
+            total_rounds = int(data.get('total_rounds', 5))
+            total_rounds = max(1, min(10, total_rounds))
+            state['settings']['mode'] = state.get('mode_hint', 'solo')
+            state['last_start_args'] = {
+                'game_type': 'angle', 'mode': state['settings']['mode'],
+                'angle_difficulty': adiff, 'total_rounds': total_rounds
+            }
+            angle_init_match(state, adiff, total_rounds)
+            touch_room(room)
+            angle_start_round(room)
+            return
+
+        # Pictionary dispatch — solo, faceoff, or group
+        if state.get('game_type') == 'pictionary':
+            total_rounds = int(data.get('total_rounds', 5))
+            total_rounds = max(1, min(15, total_rounds))
+            pdiff = data.get('pict_difficulty', 'mixed')
+            if pdiff not in ('easy', 'medium', 'hard', 'mixed'):
+                pdiff = 'mixed'
+            state['settings']['mode'] = state.get('mode_hint', 'solo')
+            state['last_start_args'] = {
+                'game_type': 'pictionary', 'mode': state['settings']['mode'],
+                'total_rounds': total_rounds, 'pict_difficulty': pdiff
+            }
+            pict_init_match(state, total_rounds, pdiff)
+            touch_room(room)
+            pict_start_round(room)
             return
 
         mode = data.get('mode', 'group')
@@ -2835,6 +2947,81 @@ def on_solo_forfeit(data=None):
     emit('forfeit_recorded', {'kind': 'solo', 'name': name})
 
 
+def _generic_forfeit_win(room, state, code, leaver_sid, leaver_name,
+                         winner_p, game_type):
+    """Award a face-off forfeit win for the newer real-time games
+    (angle, halfit, pictionary) where the per-game blocks above don't apply.
+    Ends the game with the remaining player as winner.
+
+    Returns True if it handled the forfeit.
+    """
+    winner_sid = winner_p['sid']
+    winner_name = winner_p['name']
+    winner_uid = winner_p.get('user_id')
+    if leaver_sid in state['players']:
+        del state['players'][leaver_sid]
+    if leaver_sid in state.get('chain', []):
+        state['chain'].remove(leaver_sid)
+    add_activity(state, 'opponent_forfeited', name=leaver_name, winner=winner_name)
+    try:
+        wp = get_profile(winner_name, user_id=winner_uid)
+        wp['wins'] = (wp.get('wins', 0) or 0) + 1
+        wp['games_played'] = (wp.get('games_played', 0) or 0) + 1
+        wp['current_streak'] = (wp.get('current_streak', 0) or 0) + 1
+        if wp['current_streak'] > (wp.get('best_streak', 0) or 0):
+            wp['best_streak'] = wp['current_streak']
+        grant_xp(wp, 50 * MP_XP_MULTIPLIER, game_type=game_type,
+                 coins=10 * MP_COIN_MULTIPLIER)
+        mark_profiles_dirty()
+    except Exception as e:
+        print(f"[forfeit-win-{game_type}] failed: {e}")
+    socketio.emit('opponent_left', {
+        'leaver_name': leaver_name,
+        'msg': f'{leaver_name} left the game — you win!'
+    }, room=code)
+    state['phase'] = 'game_over'
+    # Populate the per-game winner block so the game-over screen renders.
+    if game_type == 'angle' and state.get('angle') is not None:
+        state['angle']['final_ranking'] = [{
+            'sid': winner_sid, 'name': winner_name,
+            'total_degrees_off': state['angle'].get('totals_degrees_off', {}).get(winner_sid, 0),
+            'user_id': winner_uid}]
+    elif game_type == 'halfit' and state.get('halfit') is not None:
+        state['halfit']['final_ranking'] = [{
+            'sid': winner_sid, 'name': winner_name,
+            'total_grams_off': state['halfit'].get('totals_grams_off', {}).get(winner_sid, 0),
+            'user_id': winner_uid}]
+    elif game_type == 'pictionary' and state.get('pict') is not None:
+        state['pict']['final_ranking'] = [{
+            'sid': winner_sid, 'name': winner_name,
+            'total_points': state['pict'].get('totals_points', {}).get(winner_sid, 0),
+            'user_id': winner_uid}]
+    elif game_type == 'timeshot' and state.get('timeshot') is not None:
+        state['timeshot']['winner_sid'] = winner_sid
+        state['timeshot']['winner_name'] = winner_name
+        state['timeshot']['final_ranking'] = [{
+            'sid': winner_sid, 'name': winner_name,
+            'rounds_won': state['timeshot'].get('round_scores', {}).get(winner_sid, 0),
+            'is_bot': False}]
+    elif game_type == 'geography' and state.get('geo') is not None:
+        state['geo']['winners'] = [winner_sid]
+        state['geo']['final_ranking'] = [{
+            'sid': winner_sid, 'name': winner_name,
+            'score': state['geo'].get('scores', {}).get(winner_sid, 0),
+            'is_bot': False}]
+    _rank_key = {'angle': 'angle', 'halfit': 'halfit', 'pictionary': 'pict',
+                 'timeshot': 'timeshot', 'geography': 'geo'}.get(game_type, '')
+    socketio.emit('game_over', {
+        'game_type': game_type,
+        'winner_sid': winner_sid,
+        'winner_name': winner_name,
+        'winners': [{'sid': winner_sid, 'name': winner_name}],
+        'final_ranking': (state.get(_rank_key, {}) or {}).get('final_ranking', []),
+    }, room=code)
+    broadcast_state(state, code)
+    return True
+
+
 @socketio.on('leave_game')
 def on_leave_game():
     sid = request.sid
@@ -2861,7 +3048,10 @@ def on_leave_game():
                                               'setup', 'cointoss',
                                               'wc_playing', 'wc_round_intro', 'wc_round_end',
                                               'ts_round', 'ts_round_end',
-                                              'geo_round', 'geo_round_end')
+                                              'geo_round', 'geo_round_end',
+                                              'halfit_round', 'halfit_round_end',
+                                              'angle_round', 'angle_round_end',
+                                              'pict_round', 'pict_round_end')
             is_faceoff = state.get('mode_hint') == 'faceoff'
 
             # Quit-as-loss: ANY live-game leave costs you a loss + streak reset.
@@ -3052,6 +3242,15 @@ def on_leave_game():
                 }, room=code)
                 broadcast_state(state, code)
                 ended_by_forfeit = True
+
+            # Newer real-time games (angle / halfit / pictionary) — generic
+            # forfeit-win so the remaining player isn't stranded.
+            if (is_faceoff and in_live_game and len(human_opponents) == 1
+                and state.get('game_type') in ('angle', 'halfit', 'pictionary')
+                and not ended_by_forfeit):
+                ended_by_forfeit = _generic_forfeit_win(
+                    room, state, code, sid, name,
+                    human_opponents[0], state.get('game_type'))
 
             # Group play: leaver removed but game continues. Still announce.
             if (not ended_by_forfeit and in_live_game
@@ -3578,7 +3777,7 @@ def on_mindmeld_rematch():
 def api_version():
     """Return current build tag. Client polls and reloads if its loaded
     version doesn't match — catches stale browser/edge caches."""
-    return jsonify({'version': 'v25'})
+    return jsonify({'version': 'v32'})
 
 
 def _no_cache_html(resp):
@@ -4094,6 +4293,718 @@ def on_geo_submit_answer(data=None):
             geo_end_round(room)
 
 
+# =========================================================================
+# HALFIT — spatial-estimation slicing game
+#   Players slice a shape with a straight line. Mode A = equal cut,
+#   Mode B = target cut (e.g. "cut 73g from this 187g banana"). Server
+#   generates the shape, broadcasts vertices + mass, scores each cut by
+#   absolute grams off. Lowest grams off wins the round; sum across rounds
+#   determines the match winner.
+# =========================================================================
+
+HALFIT_ROUND_SECONDS = 25      # how long a player has to make a cut
+HALFIT_ROUND_END_SECONDS = 5   # how long the result screen shows before next round
+
+try:
+    import halfit_data as _halfit
+except ImportError:
+    _halfit = None
+
+
+def halfit_init_match(state: dict, mode: str, difficulty: str,
+                      total_rounds: int):
+    """Reset state for a new HalfIt match. mode = 'equal' | 'target'."""
+    state['phase'] = 'halfit_round'
+    state['game_type'] = 'halfit'
+    state['halfit'] = {
+        'mode': mode,                                  # 'equal' or 'target'
+        'difficulty': difficulty,                      # 'easy' / 'medium' / 'hard'
+        'round_number': 0,
+        'total_rounds': max(1, min(20, int(total_rounds))),
+        'current_shape': None,
+        'current_target_g': None,
+        'round_started_at': 0.0,
+        'round_deadline': 0.0,
+        'round_cuts': {},                              # sid -> {p1, p2, score}
+        'totals_grams_off': {sid: 0.0 for sid, p in state['players'].items()
+                             if not p.get('is_bot')},
+    }
+    state['round_number'] = 0
+
+
+def halfit_start_round(room: dict):
+    state = room['state']
+    h = state.get('halfit')
+    if not h or not _halfit:
+        return
+    h['round_number'] += 1
+    state['round_number'] = h['round_number']
+    shape = _halfit.generate_shape(h['difficulty'])
+    h['current_shape'] = shape
+    if h['mode'] == 'target':
+        h['current_target_g'] = _halfit.pick_target_mass(
+            shape['total_mass_g'], h['difficulty'])
+    else:
+        h['current_target_g'] = None
+    h['round_started_at'] = time.time()
+    h['round_deadline'] = time.time() + HALFIT_ROUND_SECONDS
+    h['round_cuts'] = {}
+    state['phase'] = 'halfit_round'
+    broadcast_state(state, room['code'])
+    # Schedule auto-end if not everyone cut by the deadline
+    expected_round = h['round_number']
+    code = room['code']
+
+    def deadline_check():
+        socketio.sleep(HALFIT_ROUND_SECONDS + 0.5)
+        with room['lock']:
+            cur_state = room['state']
+            cur_h = cur_state.get('halfit') or {}
+            if (cur_h.get('round_number') == expected_round
+                    and cur_state.get('phase') == 'halfit_round'):
+                halfit_end_round(room)
+    socketio.start_background_task(deadline_check)
+
+
+def halfit_end_round(room: dict):
+    state = room['state']
+    h = state.get('halfit')
+    if not h or state.get('phase') != 'halfit_round':
+        return
+    state['phase'] = 'halfit_round_end'
+    # Players who already cut had their total updated in on_halfit_submit_cut.
+    # Here we ONLY add the no-cut penalty for players who never cut, to avoid
+    # double-counting (this was a bug in v28).
+    shape = h.get('current_shape') or {}
+    total_mass = shape.get('total_mass_g', 100)
+    for sid, p in state['players'].items():
+        if p.get('is_bot'):
+            continue
+        if sid not in h['round_cuts']:
+            h['round_cuts'][sid] = {
+                'p1': None, 'p2': None,
+                'score': {'grams_off': total_mass, 'surgical': False,
+                          'left_mass_g': 0, 'right_mass_g': 0,
+                          'total_mass_g': total_mass, 'no_cut': True}
+            }
+            h['totals_grams_off'][sid] = round(
+                h['totals_grams_off'].get(sid, 0) + total_mass, 2)
+    broadcast_state(state, room['code'])
+    expected_round = h['round_number']
+    code = room['code']
+
+    def advance():
+        socketio.sleep(HALFIT_ROUND_END_SECONDS)
+        with room['lock']:
+            cur_state = room['state']
+            cur_h = cur_state.get('halfit') or {}
+            if cur_state.get('phase') != 'halfit_round_end':
+                return
+            if cur_h.get('round_number') != expected_round:
+                return
+            if cur_h['round_number'] >= cur_h['total_rounds']:
+                halfit_end_match(room)
+            else:
+                halfit_start_round(room)
+    socketio.start_background_task(advance)
+
+
+def halfit_end_match(room: dict):
+    state = room['state']
+    h = state.get('halfit')
+    if not h:
+        return
+    state['phase'] = 'game_over'
+    totals = h['totals_grams_off']
+    # Lowest grams off wins. Build ranking.
+    ranking = []
+    for sid, p in state['players'].items():
+        if p.get('is_bot'):
+            continue
+        ranking.append({
+            'sid': sid,
+            'name': p['name'],
+            'user_id': p.get('user_id'),
+            'total_grams_off': round(totals.get(sid, 0), 2),
+        })
+    ranking.sort(key=lambda r: r['total_grams_off'])
+    winners = [ranking[0]['sid']] if ranking else []
+    # Award winner XP + record losses
+    is_multi = len([s for s, p in state['players'].items() if not p.get('is_bot')]) >= 2
+    for r in ranking:
+        try:
+            sid = r['sid']
+            wp = get_profile(r['name'], user_id=r.get('user_id'))
+            wp['games_played'] = (wp.get('games_played', 0) or 0) + 1
+            if sid in winners and is_multi:
+                wp['wins'] = (wp.get('wins', 0) or 0) + 1
+                wp['current_streak'] = (wp.get('current_streak', 0) or 0) + 1
+                if wp['current_streak'] > (wp.get('best_streak', 0) or 0):
+                    wp['best_streak'] = wp['current_streak']
+                grant_xp(wp, 50 * MP_XP_MULTIPLIER, game_type='halfit',
+                         coins=10 * MP_COIN_MULTIPLIER)
+            elif is_multi:
+                wp['losses'] = (wp.get('losses', 0) or 0) + 1
+                wp['current_streak'] = 0
+            else:
+                # Solo — small XP for completion
+                grant_xp(wp, 15, game_type='halfit', coins=3)
+            mark_profiles_dirty()
+        except Exception as e:
+            print(f"[halfit_end_match] xp/loss failed: {e}")
+    socketio.emit('game_over', {
+        'game_type': 'halfit',
+        'final_ranking': ranking,
+        'winners': [{'sid': w, 'name': state['players'][w]['name']}
+                    for w in winners if w in state['players']],
+        'winner_sid': winners[0] if winners else None,
+        'winner_name': state['players'][winners[0]]['name'] if winners and winners[0] in state['players'] else None,
+    }, room=room['code'])
+    broadcast_state(state, room['code'])
+
+
+@socketio.on('halfit_submit_cut')
+def on_halfit_submit_cut(data=None):
+    """Client sends two points defining a straight cut line."""
+    sid = request.sid
+    if not isinstance(data, dict) or not _halfit:
+        return
+    try:
+        p1 = (float(data['p1'][0]), float(data['p1'][1]))
+        p2 = (float(data['p2'][0]), float(data['p2'][1]))
+    except (KeyError, TypeError, ValueError):
+        return
+    room, code = _get_room_for_sid(sid)
+    if not room:
+        return
+    with room['lock']:
+        state = room['state']
+        if state.get('game_type') != 'halfit':
+            return
+        if state.get('phase') != 'halfit_round':
+            return
+        h = state.get('halfit') or {}
+        if sid in h.get('round_cuts', {}):
+            return   # already cut this round
+        shape = h.get('current_shape')
+        if not shape:
+            return
+        score = _halfit.score_cut(
+            shape['vertices'], shape['density_per_unit_area'],
+            p1, p2, h['mode'], h.get('current_target_g'))
+        h['round_cuts'][sid] = {'p1': p1, 'p2': p2, 'score': score}
+        h['totals_grams_off'][sid] = round(
+            h.get('totals_grams_off', {}).get(sid, 0) + score['grams_off'], 2)
+        broadcast_state(state, code)
+        # End the round early if everyone has submitted
+        human_sids = [s for s, p in state['players'].items() if not p.get('is_bot')]
+        if all(s in h['round_cuts'] for s in human_sids):
+            halfit_end_round(room)
+
+
+# =========================================================================
+# ANGLE — protractor estimation game
+#   Computer shows a target angle (e.g. 50 degrees). Each player drags a
+#   rotating arm. The angle of their arm (measured from the fixed baseline,
+#   0-180 degrees) is compared to the target. Closest wins the round. Score
+#   = degrees off, lower is better. Sum across rounds = match total.
+#
+#   Server-authoritative: the target is generated and the scoring is done on
+#   the server so a client can't fake a perfect answer.
+# =========================================================================
+
+ANGLE_ROUND_SECONDS = 20       # time to set an angle each round
+ANGLE_ROUND_END_SECONDS = 5    # result screen duration before next round
+
+
+def angle_pick_target(difficulty: str, rng: random.Random = None) -> int:
+    """Pick a target angle in degrees.
+    easy   = multiples of 10, range 20-160
+    medium = multiples of 5, range 10-170
+    hard   = any whole number, range 5-175
+    """
+    if rng is None:
+        rng = random.Random()
+    if difficulty == 'easy':
+        return rng.choice(list(range(20, 161, 10)))
+    elif difficulty == 'medium':
+        return rng.choice(list(range(10, 171, 5)))
+    else:
+        return rng.randint(5, 175)
+
+
+def angle_init_match(state: dict, difficulty: str, total_rounds: int):
+    """Reset state for a new Angle match."""
+    state['phase'] = 'angle_round'
+    state['game_type'] = 'angle'
+    state['angle'] = {
+        'difficulty': difficulty,
+        'round_number': 0,
+        'total_rounds': max(1, min(20, int(total_rounds))),
+        'current_target': None,
+        'round_started_at': 0.0,
+        'round_deadline': 0.0,
+        'round_answers': {},        # sid -> {angle, degrees_off, bullseye}
+        'totals_degrees_off': {sid: 0.0 for sid, p in state['players'].items()
+                               if not p.get('is_bot')},
+    }
+    state['round_number'] = 0
+
+
+def angle_start_round(room: dict):
+    state = room['state']
+    a = state.get('angle')
+    if not a:
+        return
+    a['round_number'] += 1
+    state['round_number'] = a['round_number']
+    a['current_target'] = angle_pick_target(a['difficulty'])
+    a['round_started_at'] = time.time()
+    a['round_deadline'] = time.time() + ANGLE_ROUND_SECONDS
+    a['round_answers'] = {}
+    state['phase'] = 'angle_round'
+    broadcast_state(state, room['code'])
+    expected_round = a['round_number']
+    code = room['code']
+
+    def deadline_check():
+        socketio.sleep(ANGLE_ROUND_SECONDS + 0.5)
+        with room['lock']:
+            cur_state = room['state']
+            cur_a = cur_state.get('angle') or {}
+            if (cur_a.get('round_number') == expected_round
+                    and cur_state.get('phase') == 'angle_round'):
+                angle_end_round(room)
+    socketio.start_background_task(deadline_check)
+
+
+def angle_end_round(room: dict):
+    state = room['state']
+    a = state.get('angle')
+    if not a or state.get('phase') != 'angle_round':
+        return
+    state['phase'] = 'angle_round_end'
+    # Players who already submitted had their total updated in on_angle_submit.
+    # Here we ONLY add the penalty for players who never answered, to avoid
+    # double-counting.
+    for sid, p in state['players'].items():
+        if p.get('is_bot'):
+            continue
+        if sid not in a['round_answers']:
+            a['round_answers'][sid] = {
+                'angle': None, 'degrees_off': 180.0,
+                'bullseye': False, 'no_answer': True
+            }
+            a['totals_degrees_off'][sid] = round(
+                a['totals_degrees_off'].get(sid, 0) + 180.0, 2)
+    broadcast_state(state, room['code'])
+    expected_round = a['round_number']
+    code = room['code']
+
+    def advance():
+        socketio.sleep(ANGLE_ROUND_END_SECONDS)
+        with room['lock']:
+            cur_state = room['state']
+            cur_a = cur_state.get('angle') or {}
+            if cur_state.get('phase') != 'angle_round_end':
+                return
+            if cur_a.get('round_number') != expected_round:
+                return
+            if cur_a['round_number'] >= cur_a['total_rounds']:
+                angle_end_match(room)
+            else:
+                angle_start_round(room)
+    socketio.start_background_task(advance)
+
+
+def angle_end_match(room: dict):
+    state = room['state']
+    a = state.get('angle')
+    if not a:
+        return
+    state['phase'] = 'game_over'
+    totals = a['totals_degrees_off']
+    ranking = []
+    for sid, p in state['players'].items():
+        if p.get('is_bot'):
+            continue
+        ranking.append({
+            'sid': sid,
+            'name': p['name'],
+            'user_id': p.get('user_id'),
+            'total_degrees_off': round(totals.get(sid, 0), 2),
+        })
+    ranking.sort(key=lambda r: r['total_degrees_off'])
+    winners = [ranking[0]['sid']] if ranking else []
+    is_multi = len([s for s, p in state['players'].items()
+                    if not p.get('is_bot')]) >= 2
+    for r in ranking:
+        try:
+            sid = r['sid']
+            wp = get_profile(r['name'], user_id=r.get('user_id'))
+            wp['games_played'] = (wp.get('games_played', 0) or 0) + 1
+            if sid in winners and is_multi:
+                wp['wins'] = (wp.get('wins', 0) or 0) + 1
+                wp['current_streak'] = (wp.get('current_streak', 0) or 0) + 1
+                if wp['current_streak'] > (wp.get('best_streak', 0) or 0):
+                    wp['best_streak'] = wp['current_streak']
+                grant_xp(wp, 50 * MP_XP_MULTIPLIER, game_type='angle',
+                         coins=10 * MP_COIN_MULTIPLIER)
+            elif is_multi:
+                wp['losses'] = (wp.get('losses', 0) or 0) + 1
+                wp['current_streak'] = 0
+            else:
+                grant_xp(wp, 15, game_type='angle', coins=3)
+            mark_profiles_dirty()
+        except Exception as e:
+            print(f"[angle_end_match] xp/loss failed: {e}")
+    socketio.emit('game_over', {
+        'game_type': 'angle',
+        'final_ranking': ranking,
+        'winners': [{'sid': w, 'name': state['players'][w]['name']}
+                    for w in winners if w in state['players']],
+        'winner_sid': winners[0] if winners else None,
+        'winner_name': state['players'][winners[0]]['name'] if winners and winners[0] in state['players'] else None,
+    }, room=room['code'])
+    broadcast_state(state, room['code'])
+
+
+@socketio.on('angle_submit')
+def on_angle_submit(data=None):
+    """Client sends their chosen angle in degrees (0-180 from baseline)."""
+    sid = request.sid
+    if not isinstance(data, dict):
+        return
+    raw = data.get('angle')
+    try:
+        chosen = float(raw)
+    except (TypeError, ValueError):
+        return
+    # Clamp to valid protractor range
+    if chosen < 0:
+        chosen = 0.0
+    if chosen > 180:
+        chosen = 180.0
+    room, code = _get_room_for_sid(sid)
+    if not room:
+        return
+    with room['lock']:
+        state = room['state']
+        if state.get('game_type') != 'angle':
+            return
+        if state.get('phase') != 'angle_round':
+            return
+        a = state.get('angle') or {}
+        if sid in a.get('round_answers', {}):
+            return   # already answered this round
+        target = a.get('current_target')
+        if target is None:
+            return
+        off = abs(chosen - target)
+        a['round_answers'][sid] = {
+            'angle': round(chosen, 1),
+            'degrees_off': round(off, 1),
+            'bullseye': off <= 1.0
+        }
+        a['totals_degrees_off'][sid] = round(
+            a.get('totals_degrees_off', {}).get(sid, 0) + off, 2)
+        broadcast_state(state, code)
+        human_sids = [s for s, p in state['players'].items() if not p.get('is_bot')]
+        if all(s in a['round_answers'] for s in human_sids):
+            angle_end_round(room)
+
+
+# =========================================================================
+# PICTIONARY — emoji-rebus guessing game
+#   Everyone sees the same emoji puzzle. Players type guesses; the server
+#   checks them forgivingly (plurals, tenses, spacing, typos all pass).
+#   Scoring per round: a correct guess earns points = base - (hints_used *
+#   penalty), with a small speed bonus for answering before others. Players
+#   get up to 3 hints each per round (costing points). Wrong guesses are
+#   allowed unlimited times within the round timer. Highest total wins.
+#
+#   Unlimited non-repeating: a shuffled puzzle order is stored per match;
+#   when exhausted it reshuffles.
+# =========================================================================
+
+PICT_ROUND_SECONDS = 40        # time to guess each puzzle
+PICT_ROUND_END_SECONDS = 5     # result screen duration
+PICT_BASE_POINTS = 100         # points for a correct answer with no hints
+PICT_HINT_PENALTY = 20         # points lost per hint used
+PICT_SPEED_BONUS = 30          # extra for being first correct (decays by order)
+PICT_MAX_HINTS = 3
+
+try:
+    import pictionary_data as _pict
+except ImportError:
+    _pict = None
+
+
+def pict_init_match(state: dict, total_rounds: int, difficulty: str = 'mixed'):
+    """Reset state for a new Pictionary match."""
+    state['phase'] = 'pict_round'
+    state['game_type'] = 'pictionary'
+    order = _pict.make_shuffled_order(difficulty=difficulty) if _pict else []
+    state['pict'] = {
+        'difficulty': difficulty,
+        'round_number': 0,
+        'total_rounds': max(1, min(20, int(total_rounds))),
+        'order': order,            # shuffled bank indices
+        'order_pos': 0,            # how far we've served
+        'current': None,           # public puzzle data (NO answer leaked)
+        '_answer': None,           # server-only answer
+        '_alternates': None,       # server-only accepted spellings
+        'round_started_at': 0.0,
+        'round_deadline': 0.0,
+        'round_results': {},       # sid -> {solved, points, hints_used, order_solved}
+        'hints_used': {},          # sid -> int (this round)
+        'solve_order': [],         # sids in order they solved (for speed bonus)
+        'totals_points': {sid: 0 for sid, p in state['players'].items()
+                          if not p.get('is_bot')},
+    }
+    state['round_number'] = 0
+
+
+def pict_start_round(room: dict):
+    state = room['state']
+    pc = state.get('pict')
+    if not pc or not _pict:
+        return
+    pc['round_number'] += 1
+    state['round_number'] = pc['round_number']
+    # Pull next puzzle from the shuffled order; reshuffle if exhausted
+    if pc['order_pos'] >= len(pc['order']):
+        pc['order'] = _pict.make_shuffled_order(
+            difficulty=pc.get('difficulty', 'mixed'))
+        pc['order_pos'] = 0
+    bank_idx = pc['order'][pc['order_pos']]
+    pc['order_pos'] += 1
+    puzzle = _pict.get_puzzle(bank_idx)
+    # Public view: emoji + category + word count + hints, but NEVER the answer
+    pc['current'] = {
+        'emoji': puzzle['emoji'],
+        'category': puzzle['category'],
+        'word_count': puzzle['word_count'],
+        'hints': puzzle['hints'],          # client only reveals on request
+    }
+    pc['_answer'] = puzzle['answer']
+    pc['_alternates'] = puzzle['alternates']
+    pc['round_started_at'] = time.time()
+    pc['round_deadline'] = time.time() + PICT_ROUND_SECONDS
+    pc['round_results'] = {}
+    pc['hints_used'] = {}
+    pc['solve_order'] = []
+    state['phase'] = 'pict_round'
+    broadcast_state(state, room['code'])
+    expected_round = pc['round_number']
+    code = room['code']
+
+    def deadline_check():
+        socketio.sleep(PICT_ROUND_SECONDS + 0.5)
+        with room['lock']:
+            cur_state = room['state']
+            cur_pc = cur_state.get('pict') or {}
+            if (cur_pc.get('round_number') == expected_round
+                    and cur_state.get('phase') == 'pict_round'):
+                pict_end_round(room)
+    socketio.start_background_task(deadline_check)
+
+
+def pict_public_state(pc: dict) -> dict:
+    """Strip server-only fields (the answer!) before broadcasting."""
+    if not pc:
+        return None
+    return {
+        'round_number': pc.get('round_number'),
+        'total_rounds': pc.get('total_rounds'),
+        'current': pc.get('current'),
+        'round_started_at': pc.get('round_started_at'),
+        'round_deadline': pc.get('round_deadline'),
+        'round_results': pc.get('round_results'),
+        'hints_used': pc.get('hints_used'),
+        'solve_order': pc.get('solve_order'),
+        'totals_points': pc.get('totals_points'),
+        # Reveal the answer ONLY when the round has ended
+        'revealed_answer': pc.get('_answer') if pc.get('_revealed') else None,
+    }
+
+
+def pict_end_round(room: dict):
+    state = room['state']
+    pc = state.get('pict')
+    if not pc or state.get('phase') != 'pict_round':
+        return
+    state['phase'] = 'pict_round_end'
+    pc['_revealed'] = True          # now safe to show the answer
+    # Players who never solved get a 0-point result recorded
+    for sid, p in state['players'].items():
+        if p.get('is_bot'):
+            continue
+        if sid not in pc['round_results']:
+            pc['round_results'][sid] = {
+                'solved': False, 'points': 0,
+                'hints_used': pc['hints_used'].get(sid, 0),
+                'order_solved': None
+            }
+    broadcast_state(state, room['code'])
+    expected_round = pc['round_number']
+    code = room['code']
+
+    def advance():
+        socketio.sleep(PICT_ROUND_END_SECONDS)
+        with room['lock']:
+            cur_state = room['state']
+            cur_pc = cur_state.get('pict') or {}
+            if cur_state.get('phase') != 'pict_round_end':
+                return
+            if cur_pc.get('round_number') != expected_round:
+                return
+            cur_pc['_revealed'] = False
+            if cur_pc['round_number'] >= cur_pc['total_rounds']:
+                pict_end_match(room)
+            else:
+                pict_start_round(room)
+    socketio.start_background_task(advance)
+
+
+def pict_end_match(room: dict):
+    state = room['state']
+    pc = state.get('pict')
+    if not pc:
+        return
+    state['phase'] = 'game_over'
+    totals = pc['totals_points']
+    ranking = []
+    for sid, p in state['players'].items():
+        if p.get('is_bot'):
+            continue
+        ranking.append({
+            'sid': sid,
+            'name': p['name'],
+            'user_id': p.get('user_id'),
+            'total_points': totals.get(sid, 0),
+        })
+    # Highest points wins (descending)
+    ranking.sort(key=lambda r: -r['total_points'])
+    winners = [ranking[0]['sid']] if ranking else []
+    is_multi = len([s for s, p in state['players'].items()
+                    if not p.get('is_bot')]) >= 2
+    for r in ranking:
+        try:
+            sid = r['sid']
+            wp = get_profile(r['name'], user_id=r.get('user_id'))
+            wp['games_played'] = (wp.get('games_played', 0) or 0) + 1
+            if sid in winners and is_multi:
+                wp['wins'] = (wp.get('wins', 0) or 0) + 1
+                wp['current_streak'] = (wp.get('current_streak', 0) or 0) + 1
+                if wp['current_streak'] > (wp.get('best_streak', 0) or 0):
+                    wp['best_streak'] = wp['current_streak']
+                grant_xp(wp, 50 * MP_XP_MULTIPLIER, game_type='pictionary',
+                         coins=10 * MP_COIN_MULTIPLIER)
+            elif is_multi:
+                wp['losses'] = (wp.get('losses', 0) or 0) + 1
+                wp['current_streak'] = 0
+            else:
+                grant_xp(wp, 15, game_type='pictionary', coins=3)
+            mark_profiles_dirty()
+        except Exception as e:
+            print(f"[pict_end_match] xp/loss failed: {e}")
+    socketio.emit('game_over', {
+        'game_type': 'pictionary',
+        'final_ranking': ranking,
+        'winners': [{'sid': w, 'name': state['players'][w]['name']}
+                    for w in winners if w in state['players']],
+        'winner_sid': winners[0] if winners else None,
+        'winner_name': state['players'][winners[0]]['name'] if winners and winners[0] in state['players'] else None,
+    }, room=room['code'])
+    broadcast_state(state, room['code'])
+
+
+@socketio.on('pict_guess')
+def on_pict_guess(data=None):
+    """Player submits a text guess. Forgiving match against the hidden answer."""
+    sid = request.sid
+    if not isinstance(data, dict) or not _pict:
+        return
+    guess = data.get('guess')
+    if not isinstance(guess, str) or not guess.strip():
+        return
+    if len(guess) > 100:
+        guess = guess[:100]
+    room, code = _get_room_for_sid(sid)
+    if not room:
+        return
+    with room['lock']:
+        state = room['state']
+        if state.get('game_type') != 'pictionary':
+            return
+        if state.get('phase') != 'pict_round':
+            return
+        pc = state.get('pict') or {}
+        # Already solved this round? Ignore further guesses.
+        if sid in pc.get('round_results', {}) and pc['round_results'][sid].get('solved'):
+            return
+        correct = _pict.check_answer(guess, pc.get('_answer', ''),
+                                     pc.get('_alternates'))
+        if not correct:
+            # Tell only this player their guess was wrong (don't leak to others)
+            emit('pict_guess_result', {'correct': False, 'guess': guess})
+            return
+        # Correct! Compute points.
+        hints = pc['hints_used'].get(sid, 0)
+        order_solved = len(pc['solve_order'])     # 0 = first to solve
+        pc['solve_order'].append(sid)
+        speed_bonus = max(0, PICT_SPEED_BONUS - order_solved * 10)
+        points = max(10, PICT_BASE_POINTS - hints * PICT_HINT_PENALTY + speed_bonus)
+        pc['round_results'][sid] = {
+            'solved': True, 'points': points,
+            'hints_used': hints, 'order_solved': order_solved
+        }
+        pc['totals_points'][sid] = pc['totals_points'].get(sid, 0) + points
+        # Tell the solver they got it (with their answer so client can show it)
+        emit('pict_guess_result', {'correct': True, 'points': points,
+                                    'answer': pc.get('_answer')})
+        broadcast_state(state, code)
+        # If ALL humans have solved, end the round early
+        human_sids = [s for s, p in state['players'].items() if not p.get('is_bot')]
+        if all(s in pc['round_results'] and pc['round_results'][s].get('solved')
+               for s in human_sids):
+            pict_end_round(room)
+
+
+@socketio.on('pict_use_hint')
+def on_pict_use_hint(data=None):
+    """Player requests their next hint (max PICT_MAX_HINTS per round)."""
+    sid = request.sid
+    room, code = _get_room_for_sid(sid)
+    if not room:
+        return
+    with room['lock']:
+        state = room['state']
+        if state.get('game_type') != 'pictionary':
+            return
+        if state.get('phase') != 'pict_round':
+            return
+        pc = state.get('pict') or {}
+        # Solved players don't need hints
+        if sid in pc.get('round_results', {}) and pc['round_results'][sid].get('solved'):
+            return
+        used = pc['hints_used'].get(sid, 0)
+        if used >= PICT_MAX_HINTS:
+            emit('pict_hint', {'exhausted': True})
+            return
+        cur = pc.get('current') or {}
+        hints = cur.get('hints') or []
+        if used < len(hints):
+            hint_text = hints[used]
+        else:
+            hint_text = "No more hints"
+        pc['hints_used'][sid] = used + 1
+        emit('pict_hint', {'hint': hint_text, 'hint_number': used + 1,
+                           'remaining': PICT_MAX_HINTS - (used + 1)})
+        broadcast_state(state, code)
+
+
 @socketio.on('ts_stop_timer')
 def on_ts_stop_timer(data=None):
     """Client tapped stop. Send the elapsed milliseconds to the server."""
@@ -4222,7 +5133,7 @@ def on_challenge_send(data=None):
     target_uid = (data.get('target_user_id') or '').strip()
     game = (data.get('game') or 'guessduel').strip()
     if game not in ('guessduel', 'wordchain', 'footymind', 'trivia', 'geo',
-                    'oneshot', 'timeshot', 'geography'):
+                    'oneshot', 'timeshot', 'geography', 'halfit', 'angle', 'pictionary'):
         emit('challenge_error', {'msg': 'Unknown game'})
         return
     with SID_TO_USER_LOCK:
@@ -4428,6 +5339,149 @@ def api_profile_award():
     profile = get_profile(name, user_id=user_id)
     result = grant_xp(profile, xp, game_type=game, coins=coins)
     return jsonify(result)
+
+
+# =========================================================================
+# ADMIN PANEL — owner-only content management at /admin
+#   Lets the owner add trivia / pictionary / footy / geography content that
+#   persists in Redis and merges into the live games without a redeploy.
+#   Auth: a single password set via the ADMIN_PASSWORD env var. A signed
+#   token cookie keeps the session. If ADMIN_PASSWORD is unset, the panel is
+#   disabled (returns 503) so it can't be left wide open by accident.
+# =========================================================================
+import admin_content as _admin
+import hmac as _hmac
+
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '')
+# Secret for signing the admin cookie. Derived from the password + a constant
+# so it's stable across restarts without needing another env var.
+_ADMIN_COOKIE_NAME = 'gr_admin'
+
+
+def _admin_token() -> str:
+    if not ADMIN_PASSWORD:
+        return ''
+    return hashlib.sha256(('gameroom-admin::' + ADMIN_PASSWORD).encode()).hexdigest()
+
+
+def _admin_authed() -> bool:
+    if not ADMIN_PASSWORD:
+        return False
+    tok = request.cookies.get(_ADMIN_COOKIE_NAME, '')
+    expected = _admin_token()
+    return bool(tok) and _hmac.compare_digest(tok, expected)
+
+
+@app.route('/admin')
+def admin_page():
+    if not ADMIN_PASSWORD:
+        return ("<h1>Admin disabled</h1><p>Set the ADMIN_PASSWORD environment "
+                "variable to enable the admin panel.</p>"), 503
+    # The page itself always renders; the client-side checks auth via /api/admin/me
+    return _no_cache_html(make_response(render_template('admin.html')))
+
+
+@app.route('/api/admin/login', methods=['POST'])
+def admin_login():
+    if not ADMIN_PASSWORD:
+        return jsonify({'error': 'admin disabled'}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    pw = data.get('password', '')
+    if not pw or not _hmac.compare_digest(pw, ADMIN_PASSWORD):
+        return jsonify({'ok': False, 'error': 'wrong password'}), 401
+    resp = make_response(jsonify({'ok': True}))
+    # httponly cookie, ~30 days
+    resp.set_cookie(_ADMIN_COOKIE_NAME, _admin_token(), max_age=30*24*3600,
+                    httponly=True, samesite='Lax')
+    return resp
+
+
+@app.route('/api/admin/logout', methods=['POST'])
+def admin_logout():
+    resp = make_response(jsonify({'ok': True}))
+    resp.delete_cookie(_ADMIN_COOKIE_NAME)
+    return resp
+
+
+@app.route('/api/admin/me')
+def admin_me():
+    return jsonify({'authed': _admin_authed(),
+                    'enabled': bool(ADMIN_PASSWORD)})
+
+
+@app.route('/api/admin/content/<kind>', methods=['GET'])
+def admin_list(kind):
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    if kind not in _admin.KINDS:
+        return jsonify({'error': 'bad kind'}), 400
+    return jsonify({'items': _admin.list_items(kind),
+                    'counts': _admin.count_all()})
+
+
+@app.route('/api/admin/content/<kind>', methods=['POST'])
+def admin_add(kind):
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    if kind not in _admin.KINDS:
+        return jsonify({'error': 'bad kind'}), 400
+    item = request.get_json(force=True, silent=True) or {}
+    # Light server-side validation per kind so junk doesn't reach the games.
+    err = _validate_admin_item(kind, item)
+    if err:
+        return jsonify({'error': err}), 400
+    stored = _admin.add_item(kind, item)
+    refresh_all_admin_content()    # take effect immediately
+    return jsonify({'ok': True, 'item': stored})
+
+
+@app.route('/api/admin/content/<kind>/<item_id>', methods=['DELETE'])
+def admin_delete(kind, item_id):
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    if kind not in _admin.KINDS:
+        return jsonify({'error': 'bad kind'}), 400
+    ok = _admin.delete_item(kind, item_id)
+    refresh_all_admin_content()
+    return jsonify({'ok': ok})
+
+
+def _validate_admin_item(kind, item):
+    """Return an error string if the item is invalid, else None."""
+    try:
+        if kind == 'trivia':
+            if not item.get('q'): return 'question text required'
+            t = item.get('type', 'mc')
+            if t == 'mc':
+                opts = item.get('options') or []
+                if len([o for o in opts if str(o).strip()]) < 2:
+                    return 'multiple-choice needs at least 2 options'
+                ai = item.get('answer')
+                if ai is None or int(ai) < 0 or int(ai) >= len(opts):
+                    return 'answer must be the index of a valid option'
+            elif t == 'tf':
+                if 'answer' not in item:
+                    return 'true/false needs an answer'
+            else:
+                return 'type must be mc or tf'
+        elif kind == 'pictionary':
+            if not item.get('emoji'): return 'emoji required'
+            if not item.get('answer'): return 'answer required'
+        elif kind == 'footy':
+            if not item.get('name'): return 'player name required'
+            path = item.get('path') or []
+            if len([p for p in path if len(p) == 2 and p[1]]) < 1:
+                return 'at least one career step (years + club) required'
+        elif kind == 'geo_flag':
+            if not item.get('name'): return 'country name required'
+            if not item.get('iso2') and not item.get('image_url'):
+                return 'either an ISO2 code or an image URL is required'
+        elif kind == 'geo_landmark':
+            if not item.get('name'): return 'landmark name required'
+            if not item.get('image_url'): return 'image URL required'
+    except Exception as e:
+        return f'invalid data: {e}'
+    return None
 
 
 
@@ -4693,8 +5747,21 @@ def api_geo_check():
 # =========================================================================
 
 def janitor_thread():
+    _tick = 0
     while True:
-        socketio.sleep(60)
+        socketio.sleep(15)
+        _tick += 1
+        # Flush profiles to durable storage if anything changed. Runs every
+        # 15s so a restart loses at most ~15s of play. One HTTP call, and only
+        # when something actually changed.
+        try:
+            if PROFILES_DIRTY:
+                save_profiles()
+        except Exception as e:
+            print(f"[janitor] profile flush failed: {e}")
+        # Room cleanup only needs to run once a minute, not every 15s.
+        if _tick % 4 != 0:
+            continue
         now = time.time()
         to_delete = []
         with ROOMS_DICT_LOCK:
@@ -4716,6 +5783,18 @@ def janitor_thread():
 _BOOT_LOCK = threading.Lock()
 _BOOTED = False
 
+def refresh_all_admin_content():
+    """Reload admin-added content into every game's bank. Called on boot and
+    after any /admin add/delete so changes take effect without a redeploy."""
+    for modname in ('trivia_questions', 'pictionary_data', 'footy_players',
+                    'geography_data'):
+        try:
+            mod = __import__(modname)
+            if hasattr(mod, 'refresh_admin_content'):
+                mod.refresh_admin_content()
+        except Exception as e:
+            print(f"[admin] refresh {modname} failed: {e}")
+
 def boot_once():
     global _BOOTED
     with _BOOT_LOCK:
@@ -4730,6 +5809,10 @@ def boot_once():
             load_profiles()
         except Exception as e:
             print(f"[boot] load_profiles failed: {e}")
+        try:
+            refresh_all_admin_content()
+        except Exception as e:
+            print(f"[boot] admin content refresh failed: {e}")
         try:
             socketio.start_background_task(janitor_thread)
         except Exception as e:

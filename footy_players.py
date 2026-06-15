@@ -956,3 +956,30 @@ def get_players_by_difficulty(difficulty: str):
 
 def get_all_player_count():
     return len(PLAYERS)
+
+
+_BUILTIN_PLAYER_COUNT = len(PLAYERS)
+
+
+def _rebuild_alias_map():
+    """Rebuild ALIAS_TO_PLAYER from the current PLAYERS list."""
+    global ALIAS_TO_PLAYER
+    ALIAS_TO_PLAYER = {}
+    for p in PLAYERS:
+        canonical = p['name']
+        norms = set(p.get('aliases', []))
+        norms.add(canonical.lower())
+        for alias in norms:
+            ALIAS_TO_PLAYER[alias.lower()] = canonical
+
+
+def refresh_admin_content():
+    """Re-sync PLAYERS = builtin + current admin items, rebuild alias map."""
+    global PLAYERS
+    try:
+        import admin_content
+        builtin = PLAYERS[:_BUILTIN_PLAYER_COUNT]
+        PLAYERS = admin_content.merged_footy(builtin)
+        _rebuild_alias_map()
+    except Exception as e:
+        print(f"[footy] refresh_admin_content failed: {e}")

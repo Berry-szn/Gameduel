@@ -228,30 +228,30 @@ FLAGS_DATA = [
 # Historical flags, empires, microstates, unrecognised states.
 # Uses Wikipedia Commons (flagcdn doesn't cover these).
 LEGEND_FLAGS_DATA = [
-    ('Soviet Union',         'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_the_Soviet_Union.svg?width=320', 'legend'),
-    ('East Germany',         'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_East_Germany.svg?width=320', 'legend'),
-    ('Yugoslavia',           'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_Yugoslavia_(1946-1992).svg?width=320', 'legend'),
-    ('Czechoslovakia',       'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_Czechoslovakia.svg?width=320', 'legend'),
-    ('Ottoman Empire',       'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_the_Ottoman_Empire.svg?width=320', 'legend'),
-    ('Austria-Hungary',      'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_Austria-Hungary_1869-1918.svg?width=320', 'legend'),
-    ('Persian Empire',       'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_Iran_(1933-1964).svg?width=320', 'legend'),
-    ('Republic of Texas',    'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_Texas.svg?width=320', 'legend'),
-    ('Confederate States',   'https://commons.wikimedia.org/wiki/Special:FilePath/Confederate_National_Flag_since_Mar_4_1865.svg?width=320', 'legend'),
-    ('Kingdom of Hawaii',    'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_Hawaii.svg?width=320', 'legend'),
-    ('Tibet',                'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_Tibet.svg?width=320', 'legend'),
-    ('Catalonia',            'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_Catalonia.svg?width=320', 'legend'),
-    ('Scotland',             'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_Scotland.svg?width=320', 'legend'),
-    ('Wales',                'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_Wales.svg?width=320', 'legend'),
-    ('Basque Country',       'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_the_Basque_Country.svg?width=320', 'legend'),
-    ('Taiwan',               'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_the_Republic_of_China.svg?width=320', 'legend'),
-    ('Hong Kong',            'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_Hong_Kong.svg?width=320', 'legend'),
-    ('Palestine',            'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_Palestine.svg?width=320', 'legend'),
-    ('Greenland',            'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_Greenland.svg?width=320', 'legend'),
-    ('Faroe Islands',        'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_the_Faroe_Islands.svg?width=320', 'legend'),
-    ('Puerto Rico',          'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_Puerto_Rico.svg?width=320', 'legend'),
-    ('Bermuda',              'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_Bermuda.svg?width=320', 'legend'),
-    ('Anguilla',             'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_Anguilla.svg?width=320', 'legend'),
-    ('Cook Islands',         'https://commons.wikimedia.org/wiki/Special:FilePath/Flag_of_the_Cook_Islands.svg?width=320', 'legend'),
+    ('Soviet Union',         'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a9/Flag_of_the_Soviet_Union.svg/330px-Flag_of_the_Soviet_Union.svg.png', 'legend'),
+    ('East Germany',         'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a1/Flag_of_East_Germany.svg/330px-Flag_of_East_Germany.svg.png', 'legend'),
+    ('Yugoslavia',           'https://upload.wikimedia.org/wikipedia/commons/thumb/6/61/Flag_of_Yugoslavia_%281946-1992%29.svg/330px-Flag_of_Yugoslavia_%281946-1992%29.svg.png', 'legend'),
+    ('Czechoslovakia',       'https://upload.wikimedia.org/wikipedia/commons/thumb/c/cb/Flag_of_the_Czech_Republic.svg/330px-Flag_of_the_Czech_Republic.svg.png', 'legend'),
+    ('Ottoman Empire',       'https://upload.wikimedia.org/wikipedia/commons/thumb/8/8e/Flag_of_the_Ottoman_Empire_%281844%E2%80%931922%29.svg/330px-Flag_of_the_Ottoman_Empire_%281844%E2%80%931922%29.svg.png', 'legend'),
+    ('Austria-Hungary',      'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/Ensign_of_Austro-Hungarian_civil_fleet_%281869-1918%29.svg/330px-Ensign_of_Austro-Hungarian_civil_fleet_%281869-1918%29.svg.png', 'legend'),
+    ('Persian Empire',       'https://upload.wikimedia.org/wikipedia/commons/thumb/e/ed/Civil_flag_of_Iran_%281933%E2%80%931964%29.svg/330px-Civil_flag_of_Iran_%281933%E2%80%931964%29.svg.png', 'legend'),
+    ('Republic of Texas',    'https://upload.wikimedia.org/wikipedia/commons/thumb/f/f7/Flag_of_Texas.svg/330px-Flag_of_Texas.svg.png', 'legend'),
+    ('Confederate States',   'https://upload.wikimedia.org/wikipedia/commons/thumb/6/62/Flag_of_the_Confederate_States_%281865%29.svg/330px-Flag_of_the_Confederate_States_%281865%29.svg.png', 'legend'),
+    ('Kingdom of Hawaii',    'https://upload.wikimedia.org/wikipedia/commons/thumb/e/ef/Flag_of_Hawaii.svg/330px-Flag_of_Hawaii.svg.png', 'legend'),
+    ('Tibet',                'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3c/Flag_of_Tibet.svg/330px-Flag_of_Tibet.svg.png', 'legend'),
+    ('Catalonia',            'https://upload.wikimedia.org/wikipedia/commons/thumb/c/ce/Flag_of_Catalonia.svg/330px-Flag_of_Catalonia.svg.png', 'legend'),
+    ('Scotland',             'https://upload.wikimedia.org/wikipedia/commons/thumb/1/10/Flag_of_Scotland.svg/330px-Flag_of_Scotland.svg.png', 'legend'),
+    ('Wales',                'https://upload.wikimedia.org/wikipedia/commons/thumb/d/dc/Flag_of_Wales.svg/330px-Flag_of_Wales.svg.png', 'legend'),
+    ('Basque Country',       'https://upload.wikimedia.org/wikipedia/commons/thumb/2/2d/Flag_of_the_Basque_Country.svg/330px-Flag_of_the_Basque_Country.svg.png', 'legend'),
+    ('Taiwan',               'https://upload.wikimedia.org/wikipedia/commons/thumb/7/72/Flag_of_the_Republic_of_China.svg/330px-Flag_of_the_Republic_of_China.svg.png', 'legend'),
+    ('Hong Kong',            'https://upload.wikimedia.org/wikipedia/commons/thumb/5/5b/Flag_of_Hong_Kong.svg/330px-Flag_of_Hong_Kong.svg.png', 'legend'),
+    ('Palestine',            'https://upload.wikimedia.org/wikipedia/commons/thumb/0/00/Flag_of_Palestine.svg/330px-Flag_of_Palestine.svg.png', 'legend'),
+    ('Greenland',            'https://upload.wikimedia.org/wikipedia/commons/thumb/0/09/Flag_of_Greenland.svg/330px-Flag_of_Greenland.svg.png', 'legend'),
+    ('Faroe Islands',        'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3c/Flag_of_the_Faroe_Islands.svg/330px-Flag_of_the_Faroe_Islands.svg.png', 'legend'),
+    ('Puerto Rico',          'https://upload.wikimedia.org/wikipedia/commons/thumb/2/28/Flag_of_Puerto_Rico.svg/330px-Flag_of_Puerto_Rico.svg.png', 'legend'),
+    ('Bermuda',              'https://upload.wikimedia.org/wikipedia/commons/thumb/b/bf/Flag_of_Bermuda.svg/330px-Flag_of_Bermuda.svg.png', 'legend'),
+    ('Anguilla',             'https://upload.wikimedia.org/wikipedia/commons/thumb/b/b4/Flag_of_Anguilla.svg/330px-Flag_of_Anguilla.svg.png', 'legend'),
+    ('Cook Islands',         'https://upload.wikimedia.org/wikipedia/commons/thumb/3/35/Flag_of_the_Cook_Islands.svg/330px-Flag_of_the_Cook_Islands.svg.png', 'legend'),
 ]
 
 # Build the unified FLAGS list with image URLs
@@ -390,61 +390,61 @@ CONTINENTS = ['Africa', 'Europe', 'Asia',
 
 LANDMARKS = [
     ('Eiffel Tower', 'France',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Tour_Eiffel_Wikimedia_Commons.jpg?width=400', 'easy'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a8/Tour_Eiffel_Wikimedia_Commons.jpg/500px-Tour_Eiffel_Wikimedia_Commons.jpg', 'easy'),
     ('Statue of Liberty', 'United States',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Statue_of_Liberty_7.jpg?width=400', 'easy'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a1/Statue_of_Liberty_7.jpg/500px-Statue_of_Liberty_7.jpg', 'easy'),
     ('Big Ben', 'United Kingdom',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Elizabeth_Tower,_June_2022.jpg?width=400', 'easy'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/4/43/Elizabeth_Tower%2C_June_2022.jpg/500px-Elizabeth_Tower%2C_June_2022.jpg', 'easy'),
     ('Colosseum', 'Italy',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Colosseo_2020.jpg?width=400', 'easy'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/d/de/Colosseo_2020.jpg/500px-Colosseo_2020.jpg', 'easy'),
     ('Taj Mahal', 'India',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Taj_Mahal_(Edited).jpeg?width=400', 'easy'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1d/Taj_Mahal_%28Edited%29.jpeg/500px-Taj_Mahal_%28Edited%29.jpeg', 'easy'),
     ('Great Pyramid of Giza', 'Egypt',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Kheops-Pyramid.jpg?width=400', 'easy'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e3/Kheops-Pyramid.jpg/500px-Kheops-Pyramid.jpg', 'easy'),
     ('Sydney Opera House', 'Australia',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Sydney_Opera_House_-_Dec_2008.jpg?width=400', 'easy'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/7/7c/Sydney_Opera_House_-_Dec_2008.jpg/500px-Sydney_Opera_House_-_Dec_2008.jpg', 'easy'),
     ('Christ the Redeemer', 'Brazil',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Christ_on_Corcovado_mountain.JPG?width=400', 'easy'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/a/ae/Christ_on_Corcovado_mountain.JPG/500px-Christ_on_Corcovado_mountain.JPG', 'easy'),
     ('Machu Picchu', 'Peru',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Machu_Picchu,_Peru.jpg?width=400', 'easy'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/e/eb/Machu_Picchu%2C_Peru.jpg/500px-Machu_Picchu%2C_Peru.jpg', 'easy'),
     ('Great Wall of China', 'China',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/The_Great_Wall_of_China_at_Jinshanling-edit.jpg?width=400', 'easy'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/The_Great_Wall_of_China_at_Jinshanling-edit.jpg/500px-The_Great_Wall_of_China_at_Jinshanling-edit.jpg', 'easy'),
     ('Mona Lisa', 'France',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Mona_Lisa,_by_Leonardo_da_Vinci,_from_C2RMF_retouched.jpg?width=300', 'medium'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/e/ec/Mona_Lisa%2C_by_Leonardo_da_Vinci%2C_from_C2RMF_retouched.jpg/500px-Mona_Lisa%2C_by_Leonardo_da_Vinci%2C_from_C2RMF_retouched.jpg', 'medium'),
     ('Petra', 'Jordan',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Treasury_petra_crop.jpeg?width=400', 'medium'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/2/2f/Treasury_petra_crop.jpeg/500px-Treasury_petra_crop.jpeg', 'medium'),
     ('Stonehenge', 'United Kingdom',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Stonehenge2007_07_30.jpg?width=400', 'easy'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3c/Stonehenge2007_07_30.jpg/500px-Stonehenge2007_07_30.jpg', 'easy'),
     ('Mount Fuji', 'Japan',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Lake_Kawaguchiko_Sakura_Mount_Fuji_2.jpg?width=400', 'easy'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/f/f6/Mount_Fuji_from_Hotel_Mt_Fuji_1995-2-7.jpg/500px-Mount_Fuji_from_Hotel_Mt_Fuji_1995-2-7.jpg', 'easy'),
     ('Burj Khalifa', 'United Arab Emirates',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Burj_Khalifa.jpg?width=300', 'medium'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/9/90/Burj_Khalifa_%28worlds_tallest_building%29_and_the_Dubai_skyline_%2825781049892%29.jpg/500px-Burj_Khalifa_%28worlds_tallest_building%29_and_the_Dubai_skyline_%2825781049892%29.jpg', 'medium'),
     ('Acropolis of Athens', 'Greece',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/The_Acropolis_of_Athens_seen_from_the_Hill_of_the_Muses.jpg?width=400', 'medium'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/2/2c/1029_Acropolis_of_Athens_in_Greece_at_night_Photo_by_Giles_Laurent.jpg/500px-1029_Acropolis_of_Athens_in_Greece_at_night_Photo_by_Giles_Laurent.jpg', 'medium'),
     ('Angkor Wat', 'Cambodia',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Angkor_Wat_temple.jpg?width=400', 'medium'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/4/41/Angkor_Wat.jpg/500px-Angkor_Wat.jpg', 'medium'),
     ('Niagara Falls', 'Canada',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/3Falls_Niagara.jpg?width=400', 'easy'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/3Falls_Niagara.jpg/500px-3Falls_Niagara.jpg', 'easy'),
     ('Brandenburg Gate', 'Germany',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Brandenburger_Tor_abends.jpg?width=400', 'medium'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a6/Brandenburger_Tor_abends.jpg/500px-Brandenburger_Tor_abends.jpg', 'medium'),
     ('Chichen Itza', 'Mexico',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Chichen_Itza_3.jpg?width=400', 'medium'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/5/51/Chichen_Itza_3.jpg/500px-Chichen_Itza_3.jpg', 'medium'),
     ('Sagrada Familia', 'Spain',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Sagrada_Familia_8-12-21_(3).jpg?width=300', 'medium'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/e/ee/Sagrada_Familia_01.jpg/500px-Sagrada_Familia_01.jpg', 'medium'),
     ('Table Mountain', 'South Africa',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Table_Mountain_DanieVDM.jpg?width=400', 'hard'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/d/dc/Table_Mountain_DanieVDM.jpg/500px-Table_Mountain_DanieVDM.jpg', 'hard'),
     ('Hagia Sophia', 'Turkey',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Aya_sofya.jpg?width=400', 'medium'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/4/4a/Aya_sofya.jpg/500px-Aya_sofya.jpg', 'medium'),
     ('Mount Rushmore', 'United States',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Dean_Franklin_-_06.04.03_Mount_Rushmore_Monument_(by-sa)-3_new.jpg?width=400', 'easy'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/f/f3/Dean_Franklin_-_06.04.03_Mount_Rushmore_Monument_%28by-sa%29-3_new.jpg/500px-Dean_Franklin_-_06.04.03_Mount_Rushmore_Monument_%28by-sa%29-3_new.jpg', 'easy'),
     ('Forbidden City', 'China',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Forbidden_City_Beijing_Shenwumen_Gate.jpg?width=400', 'medium'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/e/ef/The_Forbidden_City_-_View_from_Coal_Hill.jpg/500px-The_Forbidden_City_-_View_from_Coal_Hill.jpg', 'medium'),
     ('Leaning Tower of Pisa', 'Italy',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Pisa_-_Campanile_-_2024-04-18.jpg?width=300', 'easy'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/6/66/The_Leaning_Tower_of_Pisa_SB.jpeg/500px-The_Leaning_Tower_of_Pisa_SB.jpeg', 'easy'),
     ('Moai (Easter Island)', 'Chile',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Moai_Rano_raraku.jpg?width=400', 'medium'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a2/Moai_Rano_raraku.jpg/500px-Moai_Rano_raraku.jpg', 'medium'),
     ('Kremlin', 'Russia',
-     'https://commons.wikimedia.org/wiki/Special:FilePath/Moscow_Kremlin_from_Kamenny_bridge.jpg?width=400', 'medium'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a6/Moscow_Kremlin_from_Kamenny_bridge.jpg/500px-Moscow_Kremlin_from_Kamenny_bridge.jpg', 'medium'),
 ]
 
 
@@ -504,3 +504,35 @@ def get_landmarks_round(n: int, difficulty: str = 'mixed'):
     sample = random.sample(pool, min(n, len(pool)))
     return [{'name': name, 'country': country, 'image': url, 'difficulty': diff}
             for (name, country, url, diff) in sample]
+
+
+# --- Admin content integration ---
+_BUILTIN_FLAGS_DATA_COUNT = len(FLAGS_DATA)
+_BUILTIN_LANDMARKS_COUNT = len(LANDMARKS)
+
+
+def _build_flag_url(name, iso_or_url, diff):
+    """Build a (name, image_url, diff) flag entry. Admin flags may pass a
+    direct URL via the 'url:' prefix in the iso slot."""
+    if iso_or_url.startswith('url:'):
+        return (name, iso_or_url[4:], diff)
+    return (name, f'https://flagcdn.com/w320/{iso_or_url.lower()}.png', diff)
+
+
+def refresh_admin_content():
+    """Re-sync FLAGS and LANDMARKS = builtin + current admin items."""
+    global FLAGS, LANDMARKS
+    try:
+        import admin_content
+        # Flags: builtin flagcdn flags + legend flags + admin flags
+        flags_data = admin_content.merged_geo_flags(FLAGS_DATA[:_BUILTIN_FLAGS_DATA_COUNT])
+        new_flags = []
+        for (name, iso, diff) in flags_data:
+            new_flags.append(_build_flag_url(name, iso, diff))
+        for entry in LEGEND_FLAGS_DATA:
+            new_flags.append(entry)
+        FLAGS = new_flags
+        # Landmarks: builtin + admin
+        LANDMARKS = admin_content.merged_geo_landmarks(LANDMARKS[:_BUILTIN_LANDMARKS_COUNT])
+    except Exception as e:
+        print(f"[geography] refresh_admin_content failed: {e}")

@@ -356,7 +356,10 @@ const LIVE_PLAY_SCREENS = new Set([
     'screen-wc-playing', 'screen-wc-round-intro',
     'screen-ts-round', 'screen-ts-round-end',
     'screen-geo-play', 'screen-trivia-play',
-    'screen-footy-play', 'screen-oneshot'
+    'screen-footy-play', 'screen-oneshot',
+    'screen-halfit-round', 'screen-halfit-round-end',
+    'screen-angle-round', 'screen-angle-round-end',
+    'screen-pict-round', 'screen-pict-round-end'
 ]);
 function isOnLivePlayScreen() {
     return LIVE_PLAY_SCREENS.has(State._currentScreen);
@@ -400,7 +403,7 @@ function debugLogInit() {
 // Build version this JS file expects. Must match server's /version response.
 // Auto-reload if they diverge (catches stale browser caches even when the
 // no-cache headers are bypassed by a proxy / service worker).
-const GAMEROOM_BUILD = 'v25';
+const GAMEROOM_BUILD = 'v32';
 async function checkBuildVersion() {
     try {
         const res = await fetch('/version', {cache: 'no-store'});
@@ -683,6 +686,20 @@ socket.on('state', (snapshot) => {
                     mode: 'faceoff', geo_mode: 'flags',
                     geo_difficulty: 'mixed', total_rounds: 5
                 });
+            } else if (gt === 'halfit') {
+                // Defaults for direct-challenge HalfIt: equal cut, easy, 5 rounds
+                socket.emit('start_game', {
+                    mode: 'faceoff', halfit_mode: 'equal',
+                    halfit_difficulty: 'easy', total_rounds: 5
+                });
+            } else if (gt === 'angle') {
+                socket.emit('start_game', {
+                    mode: 'faceoff', angle_difficulty: 'easy', total_rounds: 5
+                });
+            } else if (gt === 'pictionary') {
+                socket.emit('start_game', {
+                    mode: 'faceoff', total_rounds: 5
+                });
             } else {
                 socket.emit('start_game', {
                     mode: 'faceoff', bot_difficulty: 'medium', first_to: 1
@@ -716,6 +733,25 @@ socket.on('state', (snapshot) => {
                 wc_difficulty: State.selectedWcDifficulty || 'easy',
                 wc_turn_timer: State.selectedWcTimer || 30,
                 bot_difficulty: State.selectedWcBot || 'medium'
+            });
+        } else if (gameType === 'halfit') {
+            socket.emit('start_game', {
+                mode: 'solo',
+                halfit_mode: HalfIt.selectedMode || 'equal',
+                halfit_difficulty: HalfIt.selectedDifficulty || 'easy',
+                total_rounds: HalfIt.selectedRounds || 5
+            });
+        } else if (gameType === 'angle') {
+            socket.emit('start_game', {
+                mode: 'solo',
+                angle_difficulty: Angle.selectedDifficulty || 'easy',
+                total_rounds: Angle.selectedRounds || 5
+            });
+        } else if (gameType === 'pictionary') {
+            socket.emit('start_game', {
+                mode: 'solo',
+                total_rounds: Pict.selectedRounds || 5,
+                pict_difficulty: Pict.selectedDifficulty || 'easy'
             });
         } else {
             socket.emit('start_game', {
@@ -939,8 +975,17 @@ function routePhase(s) {
     else if (phase === 'ts_round_end') renderTsRoundEnd(s);
     else if (phase === 'geo_round') renderGeoMpRound(s);
     else if (phase === 'geo_round_end') renderGeoMpRoundEnd(s);
+    else if (phase === 'halfit_round') renderHalfItRound(s);
+    else if (phase === 'halfit_round_end') renderHalfItRoundEnd(s);
+    else if (phase === 'angle_round') renderAngleRound(s);
+    else if (phase === 'angle_round_end') renderAngleRoundEnd(s);
+    else if (phase === 'pict_round') renderPictRound(s);
+    else if (phase === 'pict_round_end') renderPictRoundEnd(s);
     else if (phase === 'game_over' && s.game_type === 'timeshot') renderTsGameOver(s);
     else if (phase === 'game_over' && s.game_type === 'geography') renderGeoMpGameOver(s);
+    else if (phase === 'game_over' && s.game_type === 'halfit') renderHalfItGameOver(s);
+    else if (phase === 'game_over' && s.game_type === 'angle') renderAngleGameOver(s);
+    else if (phase === 'game_over' && s.game_type === 'pictionary') renderPictGameOver(s);
     else if (phase === 'game_over') renderGameOver(s);
 }
 
@@ -2687,6 +2732,30 @@ const GAME_MODE_CONFIG = {
         solo: { available: true, desc: 'vs Computer' },
         faceoff: { available: true, desc: '1v1, send a link' },
         group: { available: true, desc: '3-8 players, share a room' }
+    },
+    halfit: {
+        label: 'HalfIt',
+        title: 'Slice the shape',
+        blurb: 'Cut equal halves, or cut off a target weight. Closest cut wins.',
+        solo: { available: true, desc: 'Practice your eye' },
+        faceoff: { available: true, desc: '1v1, same shape each round' },
+        group: { available: true, desc: '3-8 players, same shape, ranked by accuracy' }
+    },
+    angle: {
+        label: 'Angle',
+        title: 'Match the angle',
+        blurb: 'Computer names a target angle. Drag the arm to match it. Closest wins.',
+        solo: { available: true, desc: 'Train your eye' },
+        faceoff: { available: true, desc: '1v1, same target each round' },
+        group: { available: true, desc: '3-8 players, same target, ranked by accuracy' }
+    },
+    pictionary: {
+        label: 'Pictionary',
+        title: 'Crack the emoji riddle',
+        blurb: 'Guess the word or phrase from an emoji puzzle. Hints cost points. Fastest correct wins.',
+        solo: { available: true, desc: 'Solo puzzle run' },
+        faceoff: { available: true, desc: '1v1, same puzzles, race to solve' },
+        group: { available: true, desc: '3-8 players, same puzzles, most points wins' }
     }
 };
 
@@ -2830,6 +2899,16 @@ function handleModePicked(game, mode) {
             socket.emit('create_room', { game_type: 'wordchain', mode_hint: 'solo' });
             return;
         }
+        if (game === 'halfit') {
+            // For halfit solo, pre-pick defaults if intro screen didn't run.
+            if (!HalfIt.selectedMode) HalfIt.selectedMode = 'equal';
+            if (!HalfIt.selectedDifficulty) HalfIt.selectedDifficulty = 'easy';
+            if (!HalfIt.selectedRounds) HalfIt.selectedRounds = 5;
+            socket.emit('create_room', { game_type: 'halfit', mode_hint: 'solo' });
+            return;
+        }
+        if (game === 'angle') { angleShowIntro(); return; }
+        if (game === 'pictionary') { pictShowIntro(); return; }
     }
 
     // Face-off or Group — go to "Create or join?" first
@@ -2838,6 +2917,10 @@ function handleModePicked(game, mode) {
     if (game === 'geo') {
         State.selectedGame = 'geography';
     }
+    // Angle / Pictionary: show their settings intro first; the intro's Start
+    // button then routes to the action chooser (it reads State.pickedMode).
+    if (game === 'angle') { angleShowIntro(); return; }
+    if (game === 'pictionary') { pictShowIntro(); return; }
     const cfg = GAME_MODE_CONFIG[game];
     if (mode === 'faceoff') {
         $('action-title').textContent = `${cfg.label} Face-off`;
@@ -3042,6 +3125,31 @@ function wireLobby() {
                 geo_mode: GeoMP.selectedMode,
                 total_rounds: GeoMP.selectedRounds,
                 geo_difficulty: 'mixed'
+            });
+            return;
+        }
+        if (gameType === 'halfit') {
+            socket.emit('start_game', {
+                mode: State.pickedMode || State.selectedMode || 'solo',
+                halfit_mode: HalfIt.selectedMode || 'equal',
+                halfit_difficulty: HalfIt.selectedDifficulty || 'easy',
+                total_rounds: HalfIt.selectedRounds || 5
+            });
+            return;
+        }
+        if (gameType === 'angle') {
+            socket.emit('start_game', {
+                mode: State.pickedMode || State.selectedMode || 'solo',
+                angle_difficulty: Angle.selectedDifficulty || 'easy',
+                total_rounds: Angle.selectedRounds || 5
+            });
+            return;
+        }
+        if (gameType === 'pictionary') {
+            socket.emit('start_game', {
+                mode: State.pickedMode || State.selectedMode || 'solo',
+                total_rounds: Pict.selectedRounds || 5,
+                pict_difficulty: Pict.selectedDifficulty || 'easy'
             });
             return;
         }
@@ -4271,9 +4379,15 @@ async function geoStart() {
         const res = await fetch(url);
         const data = await res.json();
         Geo.items = data.items || [];
+        console.log(`[geo] loaded ${Geo.items.length} items for mode=${Geo.mode} difficulty=${Geo.difficulty}`);
         if (Geo.items.length === 0) {
             toast('No questions available — try a different mode');
             return;
+        }
+        // If a very small pool returned (e.g. server has < 10 items for this
+        // tier), surface that to the user instead of silently running a tiny round.
+        if (Geo.items.length < 5) {
+            toast(`Only ${Geo.items.length} ${Geo.difficulty} questions in this pool`);
         }
         Geo.idx = 0;
         Geo.score = 0;
@@ -4312,20 +4426,24 @@ function geoRender() {
     if (Geo.mode === 'flags' || Geo.mode === 'landmarks') {
         imgWrap.classList.remove('hidden');
         const icon = Geo.mode === 'flags' ? '🏳️' : '🗿';
-        // Always reset the wrap to a clean img element so previous errors
-        // don't linger between rounds. The fallback only shows on real error.
         imgWrap.innerHTML = '<img id="geo-image" class="geo-image" alt="">';
         const img = document.getElementById('geo-image');
         let errored = false;
-        img.onerror = () => {
-            if (errored) return;   // guard double-fire
+        const showFallback = () => {
+            if (errored) return;
             errored = true;
+            if (loadTimer) { clearTimeout(loadTimer); loadTimer = null; }
             imgWrap.innerHTML =
                 '<div class="geo-image-fallback">' +
                     '<div class="geo-image-fallback-icon">' + icon + '</div>' +
-                    '<div class="geo-image-fallback-text">Image unavailable<br>(your guess still counts)</div>' +
+                    '<div class="geo-image-fallback-text">Image slow to load<br>(your guess still counts)</div>' +
                 '</div>';
         };
+        // If the image hasn't loaded within 8 seconds, show the fallback —
+        // Wikipedia's Special:FilePath can hang for a long time.
+        let loadTimer = setTimeout(showFallback, 8000);
+        img.onerror = showFallback;
+        img.onload = () => { if (loadTimer) { clearTimeout(loadTimer); loadTimer = null; } };
         img.src = item.image;
         textBlock.classList.remove('hidden');
         const inp = $('geo-text-input');
@@ -5458,29 +5576,35 @@ function tsAutoStartIfNeeded(snapshot) {
 }
 
 function tsHandleTap() {
+    // Capture timestamp FIRST — before any other work — for max precision.
+    // performance.now() is monotonic and measures local elapsed time only;
+    // network latency has zero effect on this measurement.
+    const nowMs = performance.now();
     const btn = $('ts-tap-btn');
     if (!btn) return;
     if (TS.submitted) return;
     if (!TS.armed) {
-        TS.startTs = performance.now();
+        TS.startTs = nowMs;
         TS.armed = true;
+        // Immediate visual feedback (synchronous) so user sees the press land
         btn.classList.add('armed');
         const lbl = $('ts-tap-label');
         if (lbl) lbl.textContent = 'TAP TO STOP';
+        // Sound + haptic AFTER the visual update so they don't delay the press feel
         soundClick();
         hapticTap();
         return;
     }
-    const elapsedMs = performance.now() - TS.startTs;
+    const elapsedMs = nowMs - TS.startTs;
     TS.armed = false;
     TS.submitted = true;
     btn.classList.remove('armed');
     btn.classList.add('done');
     const lbl = $('ts-tap-label');
     if (lbl) lbl.textContent = 'STOPPED';
+    socket.emit('ts_stop_timer', { elapsed_ms: elapsedMs });
     soundClick();
     hapticTap();
-    socket.emit('ts_stop_timer', { elapsed_ms: elapsedMs });
     const waiting = $('ts-waiting-msg');
     if (waiting) waiting.classList.remove('hidden');
 }
@@ -5602,6 +5726,9 @@ function boot() {
     wireTimeShot();
     wireEditProfile();
     wireGeoMp();
+    wireHalfIt();
+    wireAngle();
+    wirePictionary();
     wireActionChooser();
     wireJoinCode();
     wireLobby();
@@ -5695,6 +5822,1135 @@ function boot() {
     } else {
         // First-time visitor — show the landing page (sign in / continue as guest)
         showScreen('screen-landing');
+    }
+}
+
+// =========================================================================
+// HALFIT — slicing game client
+// =========================================================================
+// State shared across the round screens. Reset on each round start.
+const HalfIt = {
+    selectedMode: 'equal',          // 'equal' or 'target' (lobby setting)
+    selectedDifficulty: 'easy',
+    selectedRounds: 5,
+    // Per-round runtime state
+    p1: null,                       // first tap point in canvas coords
+    p2: null,                       // second tap point
+    submitted: false,
+    timer: null,                    // round countdown interval id
+    lastShape: null,                // cached shape for the result canvas
+    lastResult: null
+};
+
+function halfitResetRound() {
+    HalfIt.p1 = null;
+    HalfIt.p2 = null;
+    HalfIt.submitted = false;
+    if (HalfIt.timer) { clearInterval(HalfIt.timer); HalfIt.timer = null; }
+    const undo = document.getElementById('halfit-undo');
+    const sub = document.getElementById('halfit-submit');
+    if (undo) undo.disabled = true;
+    if (sub) sub.disabled = true;
+    const status = document.getElementById('halfit-status');
+    if (status) status.textContent = '';
+    const hint = document.getElementById('halfit-hint');
+    if (hint) {
+        hint.textContent = 'Tap to place first point';
+        hint.style.display = '';
+    }
+}
+
+// Convert client mouse/touch coords to canvas-space coords (handles DPR scaling)
+function halfitEventToCanvas(canvas, e) {
+    const rect = canvas.getBoundingClientRect();
+    let cx, cy;
+    if (e.touches && e.touches.length) {
+        cx = e.touches[0].clientX;
+        cy = e.touches[0].clientY;
+    } else if (e.changedTouches && e.changedTouches.length) {
+        cx = e.changedTouches[0].clientX;
+        cy = e.changedTouches[0].clientY;
+    } else {
+        cx = e.clientX;
+        cy = e.clientY;
+    }
+    const x = ((cx - rect.left) / rect.width) * canvas.width;
+    const y = ((cy - rect.top) / rect.height) * canvas.height;
+    return [Math.round(x * 100) / 100, Math.round(y * 100) / 100];
+}
+
+// Extend the slice line to span the full canvas so it visually "cuts through"
+function extendLineToCanvas(p1, p2, w, h) {
+    const dx = p2[0] - p1[0];
+    const dy = p2[1] - p1[1];
+    if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) return [p1, p2];
+    // Parameterise as p1 + t*(dx, dy). Find t for canvas edges, take the
+    // smallest extension that keeps the line inside [0,w] x [0,h].
+    const ts = [];
+    if (Math.abs(dx) > 1e-6) {
+        ts.push((-p1[0]) / dx, (w - p1[0]) / dx);
+    }
+    if (Math.abs(dy) > 1e-6) {
+        ts.push((-p1[1]) / dy, (h - p1[1]) / dy);
+    }
+    const minT = Math.min(...ts);
+    const maxT = Math.max(...ts);
+    return [
+        [p1[0] + minT * dx, p1[1] + minT * dy],
+        [p1[0] + maxT * dx, p1[1] + maxT * dy]
+    ];
+}
+
+function halfitDrawShape(ctx, shape, opts) {
+    const vertices = shape.vertices || [];
+    if (vertices.length < 3) return;
+    opts = opts || {};
+    ctx.save();
+    // Fill the shape with a soft color reminiscent of the named object
+    const colorMap = {
+        apple: '#e44b4b', orange: '#f59042', tomato: '#e64545',
+        lemon: '#f4d300', plum: '#7a4193', peach: '#f9b78a',
+        banana: '#f5d76e', pear: '#9fcb5a', fish: '#7fb6d4',
+        mango: '#f7a93b', eggplant: '#5a3a82', avocado: '#7fa05c',
+        gourd: '#d49a3e', potato: '#b89060', rock: '#8a8a8a',
+        pepper: '#3aa83a', cucumber: '#6fb86f', beetroot: '#9b2a4a'
+    };
+    const fillColor = opts.fill || colorMap[shape.name] || '#f5d76e';
+    ctx.beginPath();
+    ctx.moveTo(vertices[0][0], vertices[0][1]);
+    for (let i = 1; i < vertices.length; i++) {
+        ctx.lineTo(vertices[i][0], vertices[i][1]);
+    }
+    ctx.closePath();
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+    ctx.strokeStyle = '#0f0f10';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+}
+
+function halfitDrawSliceLine(ctx, p1, p2, w, h, opts) {
+    opts = opts || {};
+    const [a, b] = extendLineToCanvas(p1, p2, w, h);
+    ctx.save();
+    ctx.strokeStyle = opts.color || '#0f0f10';
+    ctx.lineWidth = opts.width || 3;
+    if (opts.dashed) ctx.setLineDash([8, 6]);
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+    ctx.stroke();
+    ctx.restore();
+}
+
+function halfitDrawPoint(ctx, p, label) {
+    ctx.save();
+    ctx.fillStyle = '#0f0f10';
+    ctx.beginPath();
+    ctx.arc(p[0], p[1], 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(p[0], p[1], 3, 0, Math.PI * 2);
+    ctx.fill();
+    if (label) {
+        ctx.fillStyle = '#0f0f10';
+        ctx.font = 'bold 11px system-ui';
+        ctx.fillText(label, p[0] + 10, p[1] - 8);
+    }
+    ctx.restore();
+}
+
+function halfitRenderActiveCanvas(shape) {
+    const canvas = document.getElementById('halfit-canvas');
+    if (!canvas || !shape) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    halfitDrawShape(ctx, shape);
+    // Draw any placed points
+    if (HalfIt.p1) halfitDrawPoint(ctx, HalfIt.p1, '1');
+    if (HalfIt.p2) {
+        halfitDrawPoint(ctx, HalfIt.p2, '2');
+        halfitDrawSliceLine(ctx, HalfIt.p1, HalfIt.p2, w, h, {dashed: true});
+    }
+}
+
+function renderHalfItRound(s) {
+    const h = s.halfit;
+    if (!h) return;
+    showScreen('screen-halfit-round');
+    const shape = h.current_shape;
+    HalfIt.lastShape = shape;
+    // If this is a fresh round (no submit yet), reset slice state
+    if (!HalfIt.submitted || (HalfIt._lastRoundNum !== h.round_number)) {
+        halfitResetRound();
+        HalfIt._lastRoundNum = h.round_number;
+    }
+    // Header
+    document.getElementById('halfit-round-num').textContent = h.round_number || 1;
+    document.getElementById('halfit-total-rounds').textContent = h.total_rounds || 5;
+    const modeStrip = document.getElementById('halfit-mode-strip');
+    if (h.mode === 'target') {
+        modeStrip.textContent = 'Cut a target weight';
+    } else {
+        modeStrip.textContent = 'Cut into two equal halves';
+    }
+    document.getElementById('halfit-total-mass').textContent =
+        (shape ? shape.total_mass_g : 0) + 'g';
+    const targetBlock = document.getElementById('halfit-target-block');
+    if (h.mode === 'target' && h.current_target_g != null) {
+        targetBlock.classList.remove('hidden');
+        document.getElementById('halfit-target-mass').textContent =
+            h.current_target_g + 'g';
+    } else {
+        targetBlock.classList.add('hidden');
+    }
+    // Render shape
+    halfitRenderActiveCanvas(shape);
+    // Round timer
+    if (HalfIt.timer) { clearInterval(HalfIt.timer); HalfIt.timer = null; }
+    const deadline = h.round_deadline;
+    const tick = () => {
+        const left = Math.max(0, Math.ceil(deadline - Date.now() / 1000));
+        const el = document.getElementById('halfit-timer');
+        if (el) el.textContent = left;
+        if (left <= 0) { clearInterval(HalfIt.timer); HalfIt.timer = null; }
+    };
+    tick();
+    HalfIt.timer = setInterval(tick, 250);
+    // Show "waiting" status if we've already submitted (e.g. faster than opponent)
+    const myCut = h.round_cuts && h.round_cuts[State.mySid];
+    if (myCut) {
+        HalfIt.submitted = true;
+        const status = document.getElementById('halfit-status');
+        if (status) status.textContent = 'Cut submitted — waiting for others...';
+        const undo = document.getElementById('halfit-undo');
+        const sub = document.getElementById('halfit-submit');
+        if (undo) undo.disabled = true;
+        if (sub) sub.disabled = true;
+        const hint = document.getElementById('halfit-hint');
+        if (hint) hint.style.display = 'none';
+    }
+}
+
+function halfitHandleCanvasTap(e) {
+    e.preventDefault();
+    if (HalfIt.submitted) return;
+    const canvas = document.getElementById('halfit-canvas');
+    if (!canvas) return;
+    const pt = halfitEventToCanvas(canvas, e);
+    const hint = document.getElementById('halfit-hint');
+    const undo = document.getElementById('halfit-undo');
+    const sub = document.getElementById('halfit-submit');
+    if (!HalfIt.p1) {
+        HalfIt.p1 = pt;
+        if (hint) hint.textContent = 'Tap to place second point';
+        if (undo) undo.disabled = false;
+        hapticTap();
+    } else if (!HalfIt.p2) {
+        // Don't allow the same point twice
+        const dx = pt[0] - HalfIt.p1[0];
+        const dy = pt[1] - HalfIt.p1[1];
+        if (Math.hypot(dx, dy) < 10) return;
+        HalfIt.p2 = pt;
+        if (hint) hint.style.display = 'none';
+        if (sub) sub.disabled = false;
+        hapticTap();
+    }
+    halfitRenderActiveCanvas(HalfIt.lastShape);
+}
+
+function halfitHandleUndo() {
+    if (HalfIt.submitted) return;
+    halfitResetRound();
+    halfitRenderActiveCanvas(HalfIt.lastShape);
+}
+
+function halfitHandleSubmit() {
+    if (HalfIt.submitted) return;
+    if (!HalfIt.p1 || !HalfIt.p2) {
+        toast('Place two points to define your cut');
+        return;
+    }
+    HalfIt.submitted = true;
+    const undo = document.getElementById('halfit-undo');
+    const sub = document.getElementById('halfit-submit');
+    if (undo) undo.disabled = true;
+    if (sub) sub.disabled = true;
+    const status = document.getElementById('halfit-status');
+    if (status) status.textContent = 'Cut submitted — waiting for others...';
+    soundClick();
+    socket.emit('halfit_submit_cut', {p1: HalfIt.p1, p2: HalfIt.p2});
+}
+
+function wireHalfIt() {
+    const canvas = document.getElementById('halfit-canvas');
+    if (canvas) {
+        canvas.addEventListener('click', halfitHandleCanvasTap);
+        canvas.addEventListener('touchend', halfitHandleCanvasTap);
+    }
+    const undo = document.getElementById('halfit-undo');
+    if (undo) undo.onclick = () => { soundClick(); halfitHandleUndo(); };
+    const sub = document.getElementById('halfit-submit');
+    if (sub) sub.onclick = () => { halfitHandleSubmit(); };
+    const rematch = document.getElementById('halfit-rematch');
+    if (rematch) rematch.onclick = () => {
+        soundClick();
+        socket.emit('rematch');
+    };
+}
+
+function renderHalfItRoundEnd(s) {
+    const h = s.halfit;
+    if (!h) return;
+    showScreen('screen-halfit-round-end');
+    document.getElementById('halfit-end-round-num').textContent = h.round_number;
+    const shape = h.current_shape;
+    HalfIt.lastShape = shape;
+    // Render result canvas — shape + everyone's cut lines
+    const canvas = document.getElementById('halfit-result-canvas');
+    if (canvas && shape) {
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width, hh = canvas.height;
+        ctx.clearRect(0, 0, w, hh);
+        halfitDrawShape(ctx, shape);
+        // Draw each player's cut in a distinct color
+        const palette = ['#0f0f10', '#e44b4b', '#4a8fc4', '#06d6a0', '#a78bfa', '#f59042', '#f78ba0'];
+        let pi = 0;
+        const cuts = h.round_cuts || {};
+        Object.keys(cuts).forEach(sid => {
+            const cut = cuts[sid];
+            if (!cut.p1 || !cut.p2) return;
+            const col = (sid === State.mySid) ? '#0f0f10' : palette[(pi % palette.length) + 1];
+            pi++;
+            halfitDrawSliceLine(ctx, cut.p1, cut.p2, w, hh, {color: col, width: 2.5});
+        });
+    }
+    // Summary: show my cut result prominently
+    const summary = document.getElementById('halfit-result-summary');
+    const myCut = (h.round_cuts || {})[State.mySid];
+    if (summary) {
+        if (!myCut) {
+            summary.innerHTML = '<div class="halfit-summary-line miss">No cut submitted — full penalty</div>';
+        } else {
+            const sc = myCut.score || {};
+            const surgical = sc.surgical ? ' <span class="halfit-surgical-stamp">SURGICAL</span>' : '';
+            if (h.mode === 'equal') {
+                summary.innerHTML =
+                    `<div class="halfit-summary-line">` +
+                    `Your halves: <strong>${sc.left_mass_g}g</strong> / <strong>${sc.right_mass_g}g</strong>` +
+                    `</div>` +
+                    `<div class="halfit-summary-off">` +
+                    `Off by <strong>${sc.grams_off}g</strong>${surgical}` +
+                    `</div>`;
+            } else {
+                summary.innerHTML =
+                    `<div class="halfit-summary-line">` +
+                    `Target was <strong>${sc.target_g}g</strong>, you cut <strong>${sc.chosen_mass_g}g</strong>` +
+                    `</div>` +
+                    `<div class="halfit-summary-off">` +
+                    `Off by <strong>${sc.grams_off}g</strong>${surgical}` +
+                    `</div>`;
+            }
+        }
+    }
+    // Leaderboard: sort by total grams off, ascending
+    const lb = document.getElementById('halfit-leaderboard');
+    if (lb) {
+        const totals = h.totals_grams_off || {};
+        const players = (s.players || []).filter(p => !p.is_bot);
+        const rows = players.map(p => ({
+            name: p.name,
+            sid: p.sid,
+            total: totals[p.sid] || 0,
+            roundOff: ((h.round_cuts || {})[p.sid] || {}).score
+                ? ((h.round_cuts || {})[p.sid].score.grams_off)
+                : null
+        })).sort((a, b) => a.total - b.total);
+        lb.innerHTML = rows.map((r, i) => {
+            const me = r.sid === State.mySid;
+            const roundLabel = r.roundOff != null ? `+${r.roundOff}g` : '—';
+            return `<div class="halfit-lb-row ${me ? 'me' : ''}">
+                <div class="halfit-lb-rank">${i + 1}</div>
+                <div class="halfit-lb-name">${escapeHtml(r.name)}</div>
+                <div class="halfit-lb-round">${roundLabel}</div>
+                <div class="halfit-lb-total"><strong>${r.total.toFixed(1)}g</strong> total off</div>
+            </div>`;
+        }).join('');
+    }
+    const blurb = document.getElementById('halfit-next-blurb');
+    if (blurb) {
+        blurb.textContent = (h.round_number >= h.total_rounds)
+            ? 'Final results coming up...'
+            : 'Next round in a few seconds...';
+    }
+}
+
+function renderHalfItGameOver(s) {
+    showScreen('screen-halfit-game-over');
+    const h = s.halfit || {};
+    const totals = h.totals_grams_off || {};
+    const players = (s.players || []).filter(p => !p.is_bot);
+    const rows = players.map(p => ({
+        name: p.name, sid: p.sid, total: totals[p.sid] || 0
+    })).sort((a, b) => a.total - b.total);
+    const headline = document.getElementById('halfit-go-headline');
+    const stamp = document.getElementById('halfit-final-stamp');
+    if (rows.length === 0) {
+        if (headline) headline.textContent = 'Match complete';
+        if (stamp) stamp.style.display = 'none';
+    } else {
+        const winner = rows[0];
+        const isMe = winner.sid === State.mySid;
+        if (headline) headline.textContent = rows.length > 1
+            ? (isMe ? 'You win!' : `${winner.name} wins`)
+            : 'Solo run complete';
+        if (stamp) {
+            stamp.style.display = '';
+            // Stamp based on accuracy
+            const avgOff = winner.total / (h.total_rounds || 1);
+            if (avgOff < 1) stamp.textContent = 'SURGEON';
+            else if (avgOff < 5) stamp.textContent = 'SHARP EYE';
+            else if (avgOff < 15) stamp.textContent = 'NOT BAD';
+            else stamp.textContent = 'KEEP PRACTISING';
+        }
+    }
+    const rankEl = document.getElementById('halfit-final-rank');
+    if (rankEl) {
+        rankEl.innerHTML = rows.map((r, i) => {
+            const me = r.sid === State.mySid;
+            return `<div class="halfit-final-row ${me ? 'me' : ''} ${i === 0 ? 'winner' : ''}">
+                <div class="halfit-lb-rank">${i + 1}</div>
+                <div class="halfit-lb-name">${escapeHtml(r.name)}</div>
+                <div class="halfit-lb-total"><strong>${r.total.toFixed(1)}g</strong> total off</div>
+            </div>`;
+        }).join('');
+    }
+    // Standard win/lose feedback
+    const winner_sid = rows[0] && rows[0].sid;
+    if (winner_sid === State.mySid) {
+        soundWin();
+        hapticSuccess();
+        triggerConfetti();
+    } else if (rows.length > 1) {
+        soundLose();
+        hapticFail();
+    }
+}
+
+// =========================================================================
+// ANGLE — protractor estimation game client
+// =========================================================================
+const Angle = {
+    selectedDifficulty: 'easy',
+    selectedRounds: 5,
+    // Per-round runtime
+    currentAngle: 90,           // degrees from baseline (0=right horizontal, 180=left)
+    dragging: false,
+    submitted: false,
+    timer: null,
+    target: null,
+    _lastRoundNum: null
+};
+
+// Protractor geometry — pivot near bottom-center, arm length, semicircle radius
+const ANGLE_PIVOT = { x: 200, y: 200 };
+const ANGLE_ARM_LEN = 150;
+const ANGLE_ARC_R = 165;
+
+function angleResetRound() {
+    // Start the arm at a random-ish position each round so the default isn't a
+    // convenient reference (e.g. exactly 90 straight up). Player must still drag.
+    Angle.currentAngle = 40 + Math.floor(Math.random() * 100);  // 40..139
+    Angle.dragging = false;
+    Angle.submitted = false;
+    Angle._moved = false;
+    if (Angle.timer) { clearInterval(Angle.timer); Angle.timer = null; }
+    const sub = document.getElementById('angle-submit');
+    if (sub) { sub.disabled = false; sub.textContent = 'Lock in angle'; }
+    const status = document.getElementById('angle-status');
+    if (status) status.textContent = '';
+    const hint = document.getElementById('angle-hint');
+    if (hint) { hint.textContent = 'Drag the arm to set your angle'; hint.style.display = ''; }
+}
+
+// Convert a touch/mouse event to canvas coords (handles scaling)
+function angleEventToCanvas(canvas, e) {
+    const rect = canvas.getBoundingClientRect();
+    let cx, cy;
+    if (e.touches && e.touches.length) { cx = e.touches[0].clientX; cy = e.touches[0].clientY; }
+    else if (e.changedTouches && e.changedTouches.length) { cx = e.changedTouches[0].clientX; cy = e.changedTouches[0].clientY; }
+    else { cx = e.clientX; cy = e.clientY; }
+    return [
+        ((cx - rect.left) / rect.width) * canvas.width,
+        ((cy - rect.top) / rect.height) * canvas.height
+    ];
+}
+
+// Given a point, compute the angle (0-180) of the line from pivot to that point,
+// measured CCW from the positive-x (right horizontal) baseline.
+function anglePointToDegrees(px, py) {
+    const dx = px - ANGLE_PIVOT.x;
+    const dy = ANGLE_PIVOT.y - py;   // invert y (canvas y grows down)
+    let deg = Math.atan2(dy, dx) * 180 / Math.PI;
+    // Clamp to upper half (protractor is a semicircle, 0..180)
+    if (deg < 0) deg = 0;
+    if (deg > 180) deg = 180;
+    return deg;
+}
+
+function angleArmEndpoint(deg) {
+    const rad = deg * Math.PI / 180;
+    return {
+        x: ANGLE_PIVOT.x + Math.cos(rad) * ANGLE_ARM_LEN,
+        y: ANGLE_PIVOT.y - Math.sin(rad) * ANGLE_ARM_LEN
+    };
+}
+
+function angleDrawProtractor(ctx, opts) {
+    opts = opts || {};
+    const w = ctx.canvas.width;
+    ctx.clearRect(0, 0, w, ctx.canvas.height);
+    // Semicircle arc
+    ctx.save();
+    ctx.strokeStyle = '#c8ccd2';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(ANGLE_PIVOT.x, ANGLE_PIVOT.y, ANGLE_ARC_R, Math.PI, 2 * Math.PI);
+    ctx.stroke();
+    // Baseline
+    ctx.beginPath();
+    ctx.moveTo(ANGLE_PIVOT.x - ANGLE_ARC_R, ANGLE_PIVOT.y);
+    ctx.lineTo(ANGLE_PIVOT.x + ANGLE_ARC_R, ANGLE_PIVOT.y);
+    ctx.stroke();
+    // Deliberately NO tick marks and NO degree labels — the player must
+    // estimate the angle by eye (that is the entire point of the game).
+    ctx.restore();
+}
+
+function angleDrawArm(ctx, deg, color) {
+    const end = angleArmEndpoint(deg);
+    ctx.save();
+    // Arm
+    ctx.strokeStyle = color || '#e44b4b';
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(ANGLE_PIVOT.x, ANGLE_PIVOT.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+    // Draggable knob at the end
+    ctx.fillStyle = color || '#e44b4b';
+    ctx.beginPath();
+    ctx.arc(end.x, end.y, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(end.x, end.y, 4, 0, Math.PI * 2);
+    ctx.fill();
+    // Pivot dot
+    ctx.fillStyle = '#0f0f10';
+    ctx.beginPath();
+    ctx.arc(ANGLE_PIVOT.x, ANGLE_PIVOT.y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+}
+
+function angleRenderActive() {
+    const canvas = document.getElementById('angle-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    angleDrawProtractor(ctx);
+    angleDrawArm(ctx, Angle.currentAngle, Angle.submitted ? '#9aa0a8' : '#e44b4b');
+    const cur = document.getElementById('angle-current-val');
+    // Never show the live degree value during play — that would defeat the
+    // estimation challenge. Just indicate whether the arm has been moved.
+    if (cur) {
+        if (Angle.submitted) cur.textContent = 'locked';
+        else if (Angle._moved) cur.textContent = 'arm set';
+        else cur.textContent = '— set it —';
+    }
+}
+
+function renderAngleRound(s) {
+    const a = s.angle;
+    if (!a) return;
+    showScreen('screen-angle-round');
+    if (Angle._lastRoundNum !== a.round_number) {
+        angleResetRound();
+        Angle._lastRoundNum = a.round_number;
+    }
+    Angle.target = a.current_target;
+    document.getElementById('angle-round-num').textContent = a.round_number || 1;
+    document.getElementById('angle-total-rounds').textContent = a.total_rounds || 5;
+    document.getElementById('angle-target-deg').innerHTML = (a.current_target != null ? a.current_target : '?') + '&deg;';
+    angleRenderActive();
+    // Round timer
+    if (Angle.timer) { clearInterval(Angle.timer); Angle.timer = null; }
+    const deadline = a.round_deadline;
+    const tick = () => {
+        const left = Math.max(0, Math.ceil(deadline - Date.now() / 1000));
+        const el = document.getElementById('angle-timer');
+        if (el) el.textContent = left;
+        if (left <= 0) { clearInterval(Angle.timer); Angle.timer = null; }
+    };
+    tick();
+    Angle.timer = setInterval(tick, 250);
+    // If we already answered (e.g. faster than opponent), show waiting
+    const myAns = a.round_answers && a.round_answers[State.mySid];
+    if (myAns) {
+        Angle.submitted = true;
+        if (myAns.angle != null) Angle.currentAngle = myAns.angle;
+        const status = document.getElementById('angle-status');
+        if (status) status.textContent = 'Angle locked — waiting for others...';
+        const sub = document.getElementById('angle-submit');
+        if (sub) { sub.disabled = true; sub.textContent = 'Locked'; }
+        const hint = document.getElementById('angle-hint');
+        if (hint) hint.style.display = 'none';
+        angleRenderActive();
+    }
+}
+
+function angleHandlePointerDown(e) {
+    if (Angle.submitted) return;
+    e.preventDefault();
+    Angle.dragging = true;
+    angleHandlePointerMove(e);
+}
+function angleHandlePointerMove(e) {
+    if (!Angle.dragging || Angle.submitted) return;
+    e.preventDefault();
+    const canvas = document.getElementById('angle-canvas');
+    if (!canvas) return;
+    const [px, py] = angleEventToCanvas(canvas, e);
+    Angle.currentAngle = anglePointToDegrees(px, py);
+    Angle._moved = true;
+    const hint = document.getElementById('angle-hint');
+    if (hint) hint.style.display = 'none';
+    angleRenderActive();
+}
+function angleHandlePointerUp(e) {
+    if (Angle.dragging) hapticTap();
+    Angle.dragging = false;
+}
+
+function angleHandleSubmit() {
+    if (Angle.submitted) return;
+    Angle.submitted = true;
+    const sub = document.getElementById('angle-submit');
+    if (sub) { sub.disabled = true; sub.textContent = 'Locked'; }
+    const status = document.getElementById('angle-status');
+    if (status) status.textContent = 'Angle locked — waiting for others...';
+    soundClick();
+    angleRenderActive();
+    socket.emit('angle_submit', { angle: Angle.currentAngle });
+}
+
+function wireAngle() {
+    const canvas = document.getElementById('angle-canvas');
+    if (canvas) {
+        canvas.addEventListener('mousedown', angleHandlePointerDown);
+        canvas.addEventListener('mousemove', angleHandlePointerMove);
+        window.addEventListener('mouseup', angleHandlePointerUp);
+        canvas.addEventListener('touchstart', angleHandlePointerDown, { passive: false });
+        canvas.addEventListener('touchmove', angleHandlePointerMove, { passive: false });
+        canvas.addEventListener('touchend', angleHandlePointerUp);
+    }
+    const sub = document.getElementById('angle-submit');
+    if (sub) sub.onclick = () => { angleHandleSubmit(); };
+    const rematch = document.getElementById('angle-rematch');
+    if (rematch) rematch.onclick = () => { soundClick(); socket.emit('rematch'); };
+    wireAngleIntro();
+}
+
+const ANGLE_DIFF_DESC = {
+    easy: 'Easy: angles are round numbers (multiples of 10°).',
+    medium: 'Medium: angles are multiples of 5°.',
+    hard: 'Hard: any angle, anything goes.'
+};
+
+function angleShowIntro() {
+    showScreen('screen-angle-intro');
+    // Reflect current selections
+    document.querySelectorAll('#screen-angle-intro [data-anglediff]').forEach(x =>
+        x.classList.toggle('active', x.dataset.anglediff === (Angle.selectedDifficulty || 'easy')));
+    document.querySelectorAll('#screen-angle-intro [data-anglerounds]').forEach(x =>
+        x.classList.toggle('active', parseInt(x.dataset.anglerounds) === (Angle.selectedRounds || 5)));
+    const desc = document.getElementById('angle-diff-desc');
+    if (desc) desc.textContent = ANGLE_DIFF_DESC[Angle.selectedDifficulty || 'easy'];
+}
+
+function wireAngleIntro() {
+    document.querySelectorAll('#screen-angle-intro [data-anglediff]').forEach(b => {
+        b.onclick = () => {
+            soundClick();
+            Angle.selectedDifficulty = b.dataset.anglediff;
+            document.querySelectorAll('#screen-angle-intro [data-anglediff]').forEach(x =>
+                x.classList.toggle('active', x === b));
+            const desc = document.getElementById('angle-diff-desc');
+            if (desc) desc.textContent = ANGLE_DIFF_DESC[Angle.selectedDifficulty];
+        };
+    });
+    document.querySelectorAll('#screen-angle-intro [data-anglerounds]').forEach(b => {
+        b.onclick = () => {
+            soundClick();
+            Angle.selectedRounds = parseInt(b.dataset.anglerounds);
+            document.querySelectorAll('#screen-angle-intro [data-anglerounds]').forEach(x =>
+                x.classList.toggle('active', x === b));
+        };
+    });
+    const start = document.getElementById('angle-start-game');
+    if (start) start.onclick = () => {
+        soundClick();
+        const mode = State.pickedMode || 'solo';
+        if (mode === 'solo') {
+            socket.emit('create_room', { game_type: 'angle', mode_hint: 'solo' });
+        } else {
+            // Face-off / group: set up the Create-or-join chooser
+            State.selectedGame = 'angle';
+            const cfg = GAME_MODE_CONFIG['angle'];
+            if (mode === 'faceoff') {
+                document.getElementById('action-title').textContent = `${cfg.label} Face-off`;
+                document.getElementById('action-blurb').textContent = 'Create a match and send the link to your opponent, or join one they shared with you.';
+            } else {
+                document.getElementById('action-title').textContent = `${cfg.label} Friend group`;
+                document.getElementById('action-blurb').textContent = 'Create a room and share the link with your group, or join an existing room.';
+            }
+            showScreen('screen-action');
+        }
+    };
+}
+
+function renderAngleRoundEnd(s) {
+    const a = s.angle;
+    if (!a) return;
+    showScreen('screen-angle-round-end');
+    document.getElementById('angle-end-round-num').textContent = a.round_number;
+    // Result canvas: protractor + target arm + each player's arm
+    const canvas = document.getElementById('angle-result-canvas');
+    if (canvas) {
+        const ctx = canvas.getContext('2d');
+        angleDrawProtractor(ctx);
+        // Target arm — thick green, drawn first/under
+        if (a.current_target != null) {
+            angleDrawArm(ctx, a.current_target, '#06d6a0');
+        }
+        // Each player's arm
+        const palette = ['#e44b4b', '#4a8fc4', '#a78bfa', '#f59042', '#f78ba0', '#0f0f10'];
+        let pi = 0;
+        const answers = a.round_answers || {};
+        Object.keys(answers).forEach(sid => {
+            const ans = answers[sid];
+            if (ans.angle == null) return;
+            const col = (sid === State.mySid) ? '#0f0f10' : palette[pi % palette.length];
+            pi++;
+            angleDrawArm(ctx, ans.angle, col);
+        });
+    }
+    // Summary — my result
+    const summary = document.getElementById('angle-result-summary');
+    const myAns = (a.round_answers || {})[State.mySid];
+    if (summary) {
+        if (!myAns || myAns.angle == null) {
+            summary.innerHTML = '<div class="angle-summary-line miss">No angle submitted — full penalty</div>';
+        } else {
+            const bull = myAns.bullseye ? ' <span class="angle-bullseye-stamp">BULLSEYE</span>' : '';
+            summary.innerHTML =
+                `<div class="angle-summary-line">Target <strong>${a.current_target}\u00b0</strong>, you set <strong>${myAns.angle}\u00b0</strong></div>` +
+                `<div class="angle-summary-off">Off by <strong>${myAns.degrees_off}\u00b0</strong>${bull}</div>`;
+        }
+    }
+    // Leaderboard
+    const lb = document.getElementById('angle-leaderboard');
+    if (lb) {
+        const totals = a.totals_degrees_off || {};
+        const players = (s.players || []).filter(p => !p.is_bot);
+        const rows = players.map(p => ({
+            name: p.name, sid: p.sid, total: totals[p.sid] || 0,
+            roundOff: ((a.round_answers || {})[p.sid] || {}).degrees_off
+        })).sort((x, y) => x.total - y.total);
+        lb.innerHTML = rows.map((r, i) => {
+            const me = r.sid === State.mySid;
+            const roundLabel = r.roundOff != null ? `+${r.roundOff}\u00b0` : '\u2014';
+            return `<div class="angle-lb-row ${me ? 'me' : ''}">
+                <div class="angle-lb-rank">${i + 1}</div>
+                <div class="angle-lb-name">${escapeHtml(r.name)}</div>
+                <div class="angle-lb-round">${roundLabel}</div>
+                <div class="angle-lb-total"><strong>${r.total.toFixed(1)}\u00b0</strong> off</div>
+            </div>`;
+        }).join('');
+    }
+    const blurb = document.getElementById('angle-next-blurb');
+    if (blurb) blurb.textContent = (a.round_number >= a.total_rounds)
+        ? 'Final results coming up...' : 'Next round in a few seconds...';
+}
+
+function renderAngleGameOver(s) {
+    showScreen('screen-angle-game-over');
+    const a = s.angle || {};
+    const totals = a.totals_degrees_off || {};
+    const players = (s.players || []).filter(p => !p.is_bot);
+    const rows = players.map(p => ({
+        name: p.name, sid: p.sid, total: totals[p.sid] || 0
+    })).sort((x, y) => x.total - y.total);
+    const headline = document.getElementById('angle-go-headline');
+    const stamp = document.getElementById('angle-final-stamp');
+    if (rows.length === 0) {
+        if (headline) headline.textContent = 'Match complete';
+        if (stamp) stamp.style.display = 'none';
+    } else {
+        const winner = rows[0];
+        const isMe = winner.sid === State.mySid;
+        if (headline) headline.textContent = rows.length > 1
+            ? (isMe ? 'You win!' : `${winner.name} wins`)
+            : 'Solo run complete';
+        if (stamp) {
+            stamp.style.display = '';
+            const avgOff = winner.total / (a.total_rounds || 1);
+            if (avgOff < 2) stamp.textContent = 'PROTRACTOR';
+            else if (avgOff < 6) stamp.textContent = 'SHARP EYE';
+            else if (avgOff < 15) stamp.textContent = 'NOT BAD';
+            else stamp.textContent = 'KEEP PRACTISING';
+        }
+    }
+    const rankEl = document.getElementById('angle-final-rank');
+    if (rankEl) {
+        rankEl.innerHTML = rows.map((r, i) => {
+            const me = r.sid === State.mySid;
+            return `<div class="angle-final-row ${me ? 'me' : ''} ${i === 0 ? 'winner' : ''}">
+                <div class="angle-lb-rank">${i + 1}</div>
+                <div class="angle-lb-name">${escapeHtml(r.name)}</div>
+                <div class="angle-lb-total"><strong>${r.total.toFixed(1)}\u00b0</strong> total off</div>
+            </div>`;
+        }).join('');
+    }
+    const winner_sid = rows[0] && rows[0].sid;
+    if (winner_sid === State.mySid) {
+        soundWin(); hapticSuccess(); triggerConfetti();
+    } else if (rows.length > 1) {
+        soundLose(); hapticFail();
+    }
+}
+
+// =========================================================================
+// PICTIONARY — emoji rebus guessing client
+// =========================================================================
+const Pict = {
+    selectedRounds: 5,
+    submitted: false,        // have I solved this round?
+    hintsLeft: 3,
+    timer: null,
+    _lastRoundNum: null
+};
+
+function pictResetRound() {
+    Pict.submitted = false;
+    Pict.hintsLeft = 3;
+    if (Pict.timer) { clearInterval(Pict.timer); Pict.timer = null; }
+    const inp = document.getElementById('pict-guess-input');
+    if (inp) { inp.value = ''; inp.disabled = false; }
+    const gbtn = document.getElementById('pict-guess-btn');
+    if (gbtn) gbtn.disabled = false;
+    const fb = document.getElementById('pict-feedback');
+    if (fb) { fb.textContent = ''; fb.className = 'pict-feedback'; }
+    const shown = document.getElementById('pict-hints-shown');
+    if (shown) shown.innerHTML = '';
+    const status = document.getElementById('pict-solved-status');
+    if (status) status.textContent = '';
+    const hbtn = document.getElementById('pict-hint-btn');
+    if (hbtn) hbtn.disabled = false;
+}
+
+function renderPictRound(s) {
+    const pc = s.pict;
+    if (!pc) return;
+    showScreen('screen-pict-round');
+    if (Pict._lastRoundNum !== pc.round_number) {
+        pictResetRound();
+        Pict._lastRoundNum = pc.round_number;
+        // Focus the input for fast typing (desktop)
+        setTimeout(() => {
+            const inp = document.getElementById('pict-guess-input');
+            if (inp && !Pict.submitted) inp.focus();
+        }, 100);
+    }
+    const cur = pc.current || {};
+    document.getElementById('pict-round-num').textContent = pc.round_number || 1;
+    document.getElementById('pict-total-rounds').textContent = pc.total_rounds || 5;
+    document.getElementById('pict-emoji').textContent = cur.emoji || '';
+    document.getElementById('pict-category').textContent = cur.category || '';
+    const wc = cur.word_count || 1;
+    document.getElementById('pict-wordcount').textContent = wc + (wc === 1 ? ' word' : ' words');
+    // Hints left for me
+    const myHints = (pc.hints_used || {})[State.mySid] || 0;
+    Pict.hintsLeft = Math.max(0, 3 - myHints);
+    const hl = document.getElementById('pict-hints-left');
+    if (hl) hl.textContent = Pict.hintsLeft;
+    const hbtn = document.getElementById('pict-hint-btn');
+    if (hbtn) hbtn.disabled = (Pict.hintsLeft <= 0) || Pict.submitted;
+
+    // Timer
+    if (Pict.timer) { clearInterval(Pict.timer); Pict.timer = null; }
+    const deadline = pc.round_deadline;
+    const tick = () => {
+        const left = Math.max(0, Math.ceil(deadline - Date.now() / 1000));
+        const el = document.getElementById('pict-timer');
+        if (el) el.textContent = left;
+        if (left <= 0) { clearInterval(Pict.timer); Pict.timer = null; }
+    };
+    tick();
+    Pict.timer = setInterval(tick, 250);
+
+    // Did I already solve? (e.g. reconnect / state refresh)
+    const myResult = (pc.round_results || {})[State.mySid];
+    if (myResult && myResult.solved) {
+        Pict.submitted = true;
+        const inp = document.getElementById('pict-guess-input');
+        if (inp) inp.disabled = true;
+        const gbtn = document.getElementById('pict-guess-btn');
+        if (gbtn) gbtn.disabled = true;
+        if (hbtn) hbtn.disabled = true;
+        const status = document.getElementById('pict-solved-status');
+        if (status) status.textContent = `Solved! +${myResult.points} points — waiting for others...`;
+    }
+
+    // Live scoreboard (who's solved)
+    pictRenderScoreboard(s, 'pict-scoreboard');
+}
+
+function pictRenderScoreboard(s, elId) {
+    const pc = s.pict || {};
+    const el = document.getElementById(elId);
+    if (!el) return;
+    const totals = pc.totals_points || {};
+    const results = pc.round_results || {};
+    const players = (s.players || []).filter(p => !p.is_bot);
+    if (players.length <= 1) { el.innerHTML = ''; return; }   // no board in solo
+    const rows = players.map(p => ({
+        name: p.name, sid: p.sid, total: totals[p.sid] || 0,
+        solved: (results[p.sid] || {}).solved
+    })).sort((a, b) => b.total - a.total);
+    el.innerHTML = '<div class="pict-sb-title">Scores</div>' + rows.map(r => {
+        const me = r.sid === State.mySid;
+        const check = r.solved ? '<span class="pict-sb-check">✓</span>' : '';
+        return `<div class="pict-sb-row ${me ? 'me' : ''}">
+            <span class="pict-sb-name">${escapeHtml(r.name)} ${check}</span>
+            <span class="pict-sb-pts">${r.total}</span>
+        </div>`;
+    }).join('');
+}
+
+function pictSubmitGuess() {
+    if (Pict.submitted) return;
+    const inp = document.getElementById('pict-guess-input');
+    if (!inp) return;
+    const guess = (inp.value || '').trim();
+    if (!guess) return;
+    soundClick();
+    socket.emit('pict_guess', { guess: guess });
+    inp.value = '';
+}
+
+function pictUseHint() {
+    if (Pict.submitted || Pict.hintsLeft <= 0) return;
+    soundClick();
+    socket.emit('pict_use_hint', {});
+}
+
+function wirePictionary() {
+    const gbtn = document.getElementById('pict-guess-btn');
+    if (gbtn) gbtn.onclick = () => pictSubmitGuess();
+    const inp = document.getElementById('pict-guess-input');
+    if (inp) {
+        inp.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); pictSubmitGuess(); }
+        });
+    }
+    const hbtn = document.getElementById('pict-hint-btn');
+    if (hbtn) hbtn.onclick = () => pictUseHint();
+    const rematch = document.getElementById('pict-rematch');
+    if (rematch) rematch.onclick = () => { soundClick(); socket.emit('rematch'); };
+    wirePictIntro();
+}
+
+const PICT_DIFF_DESC = {
+    easy: 'Easy: single words (rainbow, popcorn, sunflower).',
+    medium: 'Medium: two-word answers (brick house, hot dog).',
+    hard: 'Hard: full phrases and idioms (walking on eggshells).',
+    mixed: 'Mixed: a blend of all difficulties.'
+};
+
+function pictShowIntro() {
+    showScreen('screen-pict-intro');
+    document.querySelectorAll('#screen-pict-intro [data-pictdiff]').forEach(x =>
+        x.classList.toggle('active', x.dataset.pictdiff === (Pict.selectedDifficulty || 'easy')));
+    document.querySelectorAll('#screen-pict-intro [data-pictrounds]').forEach(x =>
+        x.classList.toggle('active', parseInt(x.dataset.pictrounds) === (Pict.selectedRounds || 5)));
+    const desc = document.getElementById('pict-diff-desc');
+    if (desc) desc.textContent = PICT_DIFF_DESC[Pict.selectedDifficulty || 'easy'];
+}
+
+function wirePictIntro() {
+    document.querySelectorAll('#screen-pict-intro [data-pictdiff]').forEach(b => {
+        b.onclick = () => {
+            soundClick();
+            Pict.selectedDifficulty = b.dataset.pictdiff;
+            document.querySelectorAll('#screen-pict-intro [data-pictdiff]').forEach(x =>
+                x.classList.toggle('active', x === b));
+            const desc = document.getElementById('pict-diff-desc');
+            if (desc) desc.textContent = PICT_DIFF_DESC[Pict.selectedDifficulty];
+        };
+    });
+    document.querySelectorAll('#screen-pict-intro [data-pictrounds]').forEach(b => {
+        b.onclick = () => {
+            soundClick();
+            Pict.selectedRounds = parseInt(b.dataset.pictrounds);
+            document.querySelectorAll('#screen-pict-intro [data-pictrounds]').forEach(x =>
+                x.classList.toggle('active', x === b));
+        };
+    });
+    const start = document.getElementById('pict-start-game');
+    if (start) start.onclick = () => {
+        soundClick();
+        const mode = State.pickedMode || 'solo';
+        if (mode === 'solo') {
+            socket.emit('create_room', { game_type: 'pictionary', mode_hint: 'solo' });
+        } else {
+            State.selectedGame = 'pictionary';
+            const cfg = GAME_MODE_CONFIG['pictionary'];
+            if (mode === 'faceoff') {
+                document.getElementById('action-title').textContent = `${cfg.label} Face-off`;
+                document.getElementById('action-blurb').textContent = 'Create a match and send the link to your opponent, or join one they shared with you.';
+            } else {
+                document.getElementById('action-title').textContent = `${cfg.label} Friend group`;
+                document.getElementById('action-blurb').textContent = 'Create a room and share the link with your group, or join an existing room.';
+            }
+            showScreen('screen-action');
+        }
+    };
+}
+
+// Server tells us only OUR guess result (right/wrong) — don't leak to others
+socket.on('pict_guess_result', (d) => {
+    const fb = document.getElementById('pict-feedback');
+    if (!fb) return;
+    if (d.correct) {
+        Pict.submitted = true;
+        hapticSuccess();
+        fb.textContent = `Correct! "${d.answer}" — +${d.points} points`;
+        fb.className = 'pict-feedback correct';
+        const inp = document.getElementById('pict-guess-input');
+        if (inp) inp.disabled = true;
+        const gbtn = document.getElementById('pict-guess-btn');
+        if (gbtn) gbtn.disabled = true;
+        const hbtn = document.getElementById('pict-hint-btn');
+        if (hbtn) hbtn.disabled = true;
+    } else {
+        hapticFail();
+        fb.textContent = `Not "${d.guess}" — keep trying`;
+        fb.className = 'pict-feedback wrong';
+        // Clear the wrong-flash after a moment
+        setTimeout(() => {
+            if (fb.className.indexOf('wrong') >= 0) { fb.textContent = ''; fb.className = 'pict-feedback'; }
+        }, 1500);
+    }
+});
+
+socket.on('pict_hint', (d) => {
+    if (d.exhausted) {
+        const hbtn = document.getElementById('pict-hint-btn');
+        if (hbtn) hbtn.disabled = true;
+        return;
+    }
+    const shown = document.getElementById('pict-hints-shown');
+    if (shown && d.hint) {
+        const div = document.createElement('div');
+        div.className = 'pict-hint-line';
+        div.textContent = `Hint ${d.hint_number}: ${d.hint}`;
+        shown.appendChild(div);
+    }
+    Pict.hintsLeft = (typeof d.remaining === 'number') ? d.remaining : Pict.hintsLeft - 1;
+    const hl = document.getElementById('pict-hints-left');
+    if (hl) hl.textContent = Math.max(0, Pict.hintsLeft);
+    const hbtn = document.getElementById('pict-hint-btn');
+    if (hbtn && Pict.hintsLeft <= 0) hbtn.disabled = true;
+});
+
+function renderPictRoundEnd(s) {
+    const pc = s.pict;
+    if (!pc) return;
+    showScreen('screen-pict-round-end');
+    document.getElementById('pict-end-round-num').textContent = pc.round_number;
+    const cur = pc.current || {};
+    document.getElementById('pict-reveal-emoji').textContent = cur.emoji || '';
+    document.getElementById('pict-reveal-answer').textContent =
+        pc.revealed_answer || '(answer)';
+    // Per-round results
+    const rr = document.getElementById('pict-round-results');
+    if (rr) {
+        const results = pc.round_results || {};
+        const players = (s.players || []).filter(p => !p.is_bot);
+        const rows = players.map(p => ({
+            name: p.name, sid: p.sid,
+            res: results[p.sid] || { solved: false, points: 0, hints_used: 0 }
+        })).sort((a, b) => (b.res.points || 0) - (a.res.points || 0));
+        rr.innerHTML = rows.map(r => {
+            const me = r.sid === State.mySid;
+            const tag = r.res.solved
+                ? `<span class="pict-rr-points">+${r.res.points}</span>`
+                : `<span class="pict-rr-miss">missed</span>`;
+            const hintInfo = r.res.hints_used ? ` (${r.res.hints_used} hint${r.res.hints_used > 1 ? 's' : ''})` : '';
+            return `<div class="pict-rr-row ${me ? 'me' : ''}">
+                <span class="pict-rr-name">${escapeHtml(r.name)}${hintInfo}</span>
+                ${tag}
+            </div>`;
+        }).join('');
+    }
+    pictRenderScoreboard(s, 'pict-scoreboard-end');
+    const blurb = document.getElementById('pict-next-blurb');
+    if (blurb) blurb.textContent = (pc.round_number >= pc.total_rounds)
+        ? 'Final results coming up...' : 'Next round in a few seconds...';
+}
+
+function renderPictGameOver(s) {
+    showScreen('screen-pict-game-over');
+    const pc = s.pict || {};
+    const totals = pc.totals_points || {};
+    const players = (s.players || []).filter(p => !p.is_bot);
+    const rows = players.map(p => ({
+        name: p.name, sid: p.sid, total: totals[p.sid] || 0
+    })).sort((a, b) => b.total - a.total);
+    const headline = document.getElementById('pict-go-headline');
+    const stamp = document.getElementById('pict-final-stamp');
+    if (rows.length === 0) {
+        if (headline) headline.textContent = 'Match complete';
+        if (stamp) stamp.style.display = 'none';
+    } else {
+        const winner = rows[0];
+        const isMe = winner.sid === State.mySid;
+        if (headline) headline.textContent = rows.length > 1
+            ? (isMe ? 'You win!' : `${winner.name} wins`)
+            : 'Solo run complete';
+        if (stamp) { stamp.style.display = ''; stamp.textContent = rows.length > 1 ? '🏆' : '🧩'; }
+    }
+    const rankEl = document.getElementById('pict-final-rank');
+    if (rankEl) {
+        rankEl.innerHTML = rows.map((r, i) => {
+            const me = r.sid === State.mySid;
+            return `<div class="pict-final-row ${me ? 'me' : ''} ${i === 0 ? 'winner' : ''}">
+                <div class="pict-final-rank-num">${i + 1}</div>
+                <div class="pict-final-name">${escapeHtml(r.name)}</div>
+                <div class="pict-final-pts"><strong>${r.total}</strong> pts</div>
+            </div>`;
+        }).join('');
+    }
+    const winner_sid = rows[0] && rows[0].sid;
+    if (winner_sid === State.mySid) {
+        soundWin(); hapticSuccess(); triggerConfetti();
+    } else if (rows.length > 1) {
+        soundLose(); hapticFail();
     }
 }
 
