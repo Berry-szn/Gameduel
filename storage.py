@@ -183,3 +183,51 @@ def kv_set_list(key: str, items: list):
                 os.replace(tmp, path)
             except Exception as e:
                 print(f"[storage] local kv_set_list({key}) failed: {e}")
+
+
+def kv_get_obj(key: str, default=None):
+    """Load a JSON object/dict stored under `key`. Returns `default` if missing."""
+    if default is None:
+        default = {}
+    with _LOCK:
+        if _USE_REDIS:
+            try:
+                raw = _redis_get(key)
+                if not raw:
+                    return dict(default)
+                val = json.loads(raw)
+                return val if isinstance(val, dict) else dict(default)
+            except Exception as e:
+                print(f"[storage] kv_get_obj({key}) failed: {e}")
+                return dict(default)
+        else:
+            path = _local_path_for(key)
+            try:
+                if os.path.exists(path):
+                    with open(path, 'r', encoding='utf-8') as f:
+                        val = json.load(f)
+                        return val if isinstance(val, dict) else dict(default)
+                return dict(default)
+            except Exception as e:
+                print(f"[storage] local kv_get_obj({key}) failed: {e}")
+                return dict(default)
+
+
+def kv_set_obj(key: str, obj: dict):
+    """Persist a JSON object/dict under `key`."""
+    with _LOCK:
+        if _USE_REDIS:
+            try:
+                blob = json.dumps(obj, separators=(',', ':'))
+                _redis_set(key, blob)
+            except Exception as e:
+                print(f"[storage] kv_set_obj({key}) failed: {e}")
+        else:
+            path = _local_path_for(key)
+            try:
+                tmp = path + '.tmp'
+                with open(tmp, 'w', encoding='utf-8') as f:
+                    json.dump(obj, f, indent=2)
+                os.replace(tmp, path)
+            except Exception as e:
+                print(f"[storage] local kv_set_obj({key}) failed: {e}")

@@ -3736,3 +3736,18 @@ main {
     display: grid; place-items: center; padding: 12px;
 }
 .pict-card-emoji { font-size: 36px; letter-spacing: 4px; }
+
+/* Admin announcement banner on home screen */
+.home-announcement {
+    background: var(--primary-soft, #e8f0ff);
+    color: var(--primary-dark, #1748cc);
+    border: 1px solid var(--primary, #1f5fff);
+    border-radius: var(--radius-sm, 9px);
+    padding: 12px 16px;
+    margin-bottom: 14px;
+    font-weight: 600;
+    font-size: 14px;
+    text-align: center;
+    line-height: 1.4;
+}
+.home-announcement.hidden { display: none; }

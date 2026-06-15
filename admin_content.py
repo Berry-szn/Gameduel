@@ -96,6 +96,113 @@ def count_all() -> dict:
     return {k: len(_load_raw(k)) for k in KINDS}
 
 
+# ===== Settings store (game toggles, announcement, banned names) =====
+# A single Redis key holds an admin settings dict. Kept separate from content.
+_SETTINGS_KEY = _KEY_PREFIX + "settings"
+_DEFAULT_SETTINGS = {
+    'disabled_games': [],      # list of game keys hidden from the home screen
+    'announcement': {'text': '', 'enabled': False},
+    'banned_names': [],        # lowercased names that can't be used
+}
+
+
+def get_settings() -> dict:
+    """Return the admin settings dict, with all default keys guaranteed present."""
+    with _LOCK:
+        try:
+            s = _storage.kv_get_obj(_SETTINGS_KEY, _DEFAULT_SETTINGS)
+        except Exception as e:
+            print(f"[admin] get_settings failed: {e}")
+            s = {}
+    # Ensure all default keys exist (forward-compatible)
+    out = dict(_DEFAULT_SETTINGS)
+    out.update(s or {})
+    if not isinstance(out.get('disabled_games'), list):
+        out['disabled_games'] = []
+    if not isinstance(out.get('banned_names'), list):
+        out['banned_names'] = []
+    if not isinstance(out.get('announcement'), dict):
+        out['announcement'] = {'text': '', 'enabled': False}
+    return out
+
+
+def save_settings(settings: dict):
+    with _LOCK:
+        try:
+            _storage.kv_set_obj(_SETTINGS_KEY, settings)
+        except Exception as e:
+            print(f"[admin] save_settings failed: {e}")
+
+
+def set_game_disabled(game_key: str, disabled: bool):
+    s = get_settings()
+    dg = set(s.get('disabled_games', []))
+    if disabled:
+        dg.add(game_key)
+    else:
+        dg.discard(game_key)
+    s['disabled_games'] = sorted(dg)
+    save_settings(s)
+    return s['disabled_games']
+
+
+def set_announcement(text: str, enabled: bool):
+    s = get_settings()
+    s['announcement'] = {'text': (text or '')[:300], 'enabled': bool(enabled)}
+    save_settings(s)
+    return s['announcement']
+
+
+def add_banned_name(name: str):
+    s = get_settings()
+    n = (name or '').strip().lower()
+    if n and n not in s['banned_names']:
+        s['banned_names'].append(n)
+        save_settings(s)
+    return s['banned_names']
+
+
+def remove_banned_name(name: str):
+    s = get_settings()
+    n = (name or '').strip().lower()
+    s['banned_names'] = [b for b in s.get('banned_names', []) if b != n]
+    save_settings(s)
+    return s['banned_names']
+
+
+def is_name_banned(name: str) -> bool:
+    n = (name or '').strip().lower()
+    if not n:
+        return False
+    try:
+        return n in get_settings().get('banned_names', [])
+    except Exception:
+        return False
+
+
+# ===== Bulk add =====
+
+def bulk_add(kind: str, items: list) -> dict:
+    """Add many items at once. Returns {added, failed:[{index,error}]}."""
+    if kind not in KINDS:
+        raise ValueError(f"unknown kind: {kind}")
+    added = 0
+    failed = []
+    with _LOCK:
+        existing = _load_raw(kind)
+        for i, item in enumerate(items):
+            try:
+                it = dict(item)
+                it['id'] = 'a_' + uuid.uuid4().hex[:12]
+                it['created_at'] = time.time()
+                existing.append(it)
+                added += 1
+            except Exception as e:
+                failed.append({'index': i, 'error': str(e)})
+        _save_raw(kind, existing)
+    return {'added': added, 'failed': failed}
+
+
 # ----- Merge helpers: convert admin items into the game's native format -----
 
 def merged_trivia(builtin_questions: list) -> list:

@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#ffffff">
     <title>GameRoom</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=32">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=34">
 </head>
 <body data-theme="default">
 
@@ -60,6 +60,8 @@
         </section>
 
         <section id="screen-home" class="screen">
+            <!-- Admin announcement banner (hidden unless set) -->
+            <div id="home-announcement" class="home-announcement hidden"></div>
             <!-- Always-visible profile card. Shows level / title / coins / XP.
                  Defaults: Lvl 1, Newcomer, 0 coins, 0 XP for fresh users. -->
             <div id="home-profile-card" class="card profile-card">
@@ -1752,6 +1754,6 @@
         window.INITIAL_MATCH_CODE = "{{ match_code or '' }}";
     </script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="{{ url_for('static', filename='app.js') }}?v=32"></script>
+    <script src="{{ url_for('static', filename='app.js') }}?v=34"></script>
 </body>
 </html>

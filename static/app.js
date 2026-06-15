@@ -403,7 +403,7 @@ function debugLogInit() {
 // Build version this JS file expects. Must match server's /version response.
 // Auto-reload if they diverge (catches stale browser caches even when the
 // no-cache headers are bypassed by a proxy / service worker).
-const GAMEROOM_BUILD = 'v32';
+const GAMEROOM_BUILD = 'v34';
 async function checkBuildVersion() {
     try {
         const res = await fetch('/version', {cache: 'no-store'});
@@ -5694,6 +5694,33 @@ function renderTsGameOver(s) {
 
 // =========================================================================
 
+// Fetch admin-controlled public config: the announcement banner and any
+// disabled games. Fail-open — if anything errors, show the normal home
+// screen with all games (a config glitch must never break the app).
+async function applyPublicConfig() {
+    try {
+        const r = await fetch('/api/public/config');
+        if (!r.ok) return;
+        const cfg = await r.json();
+        // Announcement banner
+        const banner = document.getElementById('home-announcement');
+        if (banner && cfg.announcement && cfg.announcement.enabled && cfg.announcement.text) {
+            banner.textContent = cfg.announcement.text;
+            banner.classList.remove('hidden');
+        } else if (banner) {
+            banner.classList.add('hidden');
+        }
+        // Hide disabled games from the home grid
+        const disabled = Array.isArray(cfg.disabled_games) ? cfg.disabled_games : [];
+        document.querySelectorAll('.game-card[data-game]').forEach(card => {
+            const g = card.getAttribute('data-game');
+            card.style.display = disabled.includes(g) ? 'none' : '';
+        });
+    } catch (e) {
+        // fail-open: do nothing
+    }
+}
+
 function boot() {
     loadTheme();
     loadSoundPrefs();
@@ -5718,6 +5745,7 @@ function boot() {
 
     wireLanding();
     wireHome();
+    applyPublicConfig();   // announcement banner + hide disabled games (fail-open)
     wireGuestName();
     wireInviteModal();
     wireChallenge();

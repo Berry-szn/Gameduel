@@ -2246,6 +2246,14 @@ def on_create_room(data=None):
         mh = data.get('mode_hint')
         if mh in ('faceoff', 'group', 'solo'):
             mode_hint = mh
+    # Respect admin "disabled games" — refuse to create a room for a game the
+    # owner has turned off (defense in depth; the client also hides it).
+    try:
+        if game_type in _admin.get_settings().get('disabled_games', []):
+            emit('error_msg', {'msg': 'This game is currently unavailable.'})
+            return
+    except Exception:
+        pass
     code = create_room(game_type, mode_hint)
     print(f"[create_room] sid={request.sid[:8]} code={code} game={game_type} hint={mode_hint}")
     emit('room_created', {
@@ -2264,6 +2272,13 @@ def on_join_room(data):
     if not name:
         emit('error_msg', {'msg': 'Please enter a name'})
         return
+    # Respect admin name bans
+    try:
+        if _admin.is_name_banned(name):
+            emit('error_msg', {'msg': 'That name is not allowed. Please choose another.'})
+            return
+    except Exception:
+        pass
     if not code:
         emit('error_msg', {'msg': 'No room code given'})
         return
@@ -3777,7 +3792,7 @@ def on_mindmeld_rematch():
 def api_version():
     """Return current build tag. Client polls and reloads if its loaded
     version doesn't match — catches stale browser/edge caches."""
-    return jsonify({'version': 'v32'})
+    return jsonify({'version': 'v34'})
 
 
 def _no_cache_html(resp):
@@ -5482,6 +5497,246 @@ def _validate_admin_item(kind, item):
     except Exception as e:
         return f'invalid data: {e}'
     return None
+
+
+# =========================================================================
+# ADMIN — extended features: players, bulk, game toggles, announcement,
+# rooms monitor, export. All require _admin_authed().
+# =========================================================================
+
+@app.route('/api/admin/players', methods=['GET'])
+def admin_players():
+    """List all player profiles (summary fields) for the management table."""
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    with PROFILES_LOCK:
+        rows = []
+        for key, p in PROFILES_CACHE.items():
+            rows.append({
+                'key': key,
+                'name': p.get('name', '(unnamed)'),
+                'user_id': p.get('user_id'),
+                'level': p.get('level', 1),
+                'xp': p.get('xp', 0),
+                'coins': p.get('coins', 0),
+                'games_played': p.get('games_played', 0),
+                'wins': p.get('wins', 0),
+                'losses': p.get('losses', 0),
+                'last_played_at': p.get('last_played_at'),
+            })
+    rows.sort(key=lambda r: -(r['xp'] or 0))
+    return jsonify({'players': rows, 'total': len(rows)})
+
+
+@app.route('/api/admin/players/<path:key>/reset', methods=['POST'])
+def admin_player_reset(key):
+    """Reset a player's progress to a fresh profile (keeps name + user_id)."""
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    with PROFILES_LOCK:
+        p = PROFILES_CACHE.get(key)
+        if not p:
+            return jsonify({'error': 'not found'}), 404
+        name = p.get('name', '')
+        uid = p.get('user_id')
+        fresh = fresh_profile(name)
+        if uid:
+            fresh['user_id'] = uid
+        PROFILES_CACHE[key] = fresh
+    mark_profiles_dirty()
+    save_profiles()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/admin/players/<path:key>', methods=['DELETE'])
+def admin_player_delete(key):
+    """Delete a player profile entirely."""
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    with PROFILES_LOCK:
+        existed = PROFILES_CACHE.pop(key, None) is not None
+    if existed:
+        mark_profiles_dirty()
+        save_profiles()
+    return jsonify({'ok': existed})
+
+
+@app.route('/api/admin/bans', methods=['GET'])
+def admin_bans_list():
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    return jsonify({'banned_names': _admin.get_settings().get('banned_names', [])})
+
+
+@app.route('/api/admin/bans', methods=['POST'])
+def admin_bans_add():
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    data = request.get_json(force=True, silent=True) or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    banned = _admin.add_banned_name(name)
+    return jsonify({'ok': True, 'banned_names': banned})
+
+
+@app.route('/api/admin/bans/<path:name>', methods=['DELETE'])
+def admin_bans_remove(name):
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    banned = _admin.remove_banned_name(name)
+    return jsonify({'ok': True, 'banned_names': banned})
+
+
+@app.route('/api/admin/bulk/<kind>', methods=['POST'])
+def admin_bulk(kind):
+    """Bulk-add items. Body: {items:[...]} already-parsed by the client."""
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    if kind not in _admin.KINDS:
+        return jsonify({'error': 'bad kind'}), 400
+    data = request.get_json(force=True, silent=True) or {}
+    items = data.get('items') or []
+    if not isinstance(items, list) or not items:
+        return jsonify({'error': 'no items'}), 400
+    # Validate each; only add the valid ones, report the rest.
+    valid, errors = [], []
+    for i, it in enumerate(items):
+        err = _validate_admin_item(kind, it)
+        if err:
+            errors.append({'index': i, 'error': err})
+        else:
+            valid.append(it)
+    result = _admin.bulk_add(kind, valid) if valid else {'added': 0, 'failed': []}
+    refresh_all_admin_content()
+    return jsonify({'ok': True, 'added': result['added'],
+                    'rejected': errors, 'rejected_count': len(errors)})
+
+
+# ---- Game enable/disable ----
+ALL_GAME_KEYS = ['guessduel', 'wordchain', 'oneshot', 'footymind', 'trivia',
+                 'geography', 'timeshot', 'halfit', 'angle', 'pictionary']
+
+
+@app.route('/api/admin/games', methods=['GET'])
+def admin_games_list():
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    disabled = _admin.get_settings().get('disabled_games', [])
+    return jsonify({'games': ALL_GAME_KEYS, 'disabled': disabled})
+
+
+@app.route('/api/admin/games/<game_key>', methods=['POST'])
+def admin_games_toggle(game_key):
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    if game_key not in ALL_GAME_KEYS:
+        return jsonify({'error': 'unknown game'}), 400
+    data = request.get_json(force=True, silent=True) or {}
+    disabled = bool(data.get('disabled'))
+    new_list = _admin.set_game_disabled(game_key, disabled)
+    return jsonify({'ok': True, 'disabled': new_list})
+
+
+# ---- Announcement ----
+@app.route('/api/admin/announcement', methods=['GET'])
+def admin_announcement_get():
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    return jsonify(_admin.get_settings().get('announcement', {'text': '', 'enabled': False}))
+
+
+@app.route('/api/admin/announcement', methods=['POST'])
+def admin_announcement_set():
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    data = request.get_json(force=True, silent=True) or {}
+    ann = _admin.set_announcement(data.get('text', ''), data.get('enabled', False))
+    return jsonify({'ok': True, 'announcement': ann})
+
+
+# ---- Live rooms monitor ----
+@app.route('/api/admin/rooms', methods=['GET'])
+def admin_rooms_list():
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    now = time.time()
+    rows = []
+    with ROOMS_DICT_LOCK:
+        for code, room in ROOMS.items():
+            state = room.get('state', {}) or {}
+            players = state.get('players', {}) or {}
+            humans = [p for p in players.values() if not p.get('is_bot')]
+            rows.append({
+                'code': code,
+                'game_type': state.get('game_type', '?'),
+                'mode': state.get('mode_hint', '?'),
+                'phase': state.get('phase', '?'),
+                'players': len(humans),
+                'player_names': [p.get('name', '?') for p in humans][:8],
+                'age_sec': int(now - room.get('created_at', now)),
+                'idle_sec': int(now - room.get('last_activity_at', now)),
+            })
+    rows.sort(key=lambda r: r['idle_sec'])
+    return jsonify({'rooms': rows, 'total': len(rows)})
+
+
+@app.route('/api/admin/rooms/<code>', methods=['DELETE'])
+def admin_rooms_close(code):
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    code = (code or '').upper()
+    room = get_room(code)
+    if not room:
+        return jsonify({'ok': False, 'error': 'not found'}), 404
+    try:
+        socketio.emit('room_closed', {'msg': 'This room was closed by an admin.'},
+                      room=code)
+    except Exception:
+        pass
+    delete_room(code)
+    return jsonify({'ok': True})
+
+
+# ---- Export / backup ----
+@app.route('/api/admin/export', methods=['GET'])
+def admin_export():
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    with PROFILES_LOCK:
+        profiles = dict(PROFILES_CACHE)
+    content = {k: _admin.list_items(k) for k in _admin.KINDS}
+    payload = {
+        'exported_at': time.time(),
+        'version': 'v34',
+        'profiles': profiles,
+        'admin_content': content,
+        'settings': _admin.get_settings(),
+    }
+    resp = make_response(jsonify(payload))
+    resp.headers['Content-Disposition'] = 'attachment; filename=gameroom_backup.json'
+    return resp
+
+
+# =========================================================================
+# PUBLIC endpoints the main app reads (no auth) — announcement + game list.
+# Fail-open: if these error, the client just shows everything / no banner.
+# =========================================================================
+
+@app.route('/api/public/config', methods=['GET'])
+def public_config():
+    try:
+        s = _admin.get_settings()
+        ann = s.get('announcement', {})
+        return jsonify({
+            'disabled_games': s.get('disabled_games', []),
+            'announcement': {
+                'text': ann.get('text', '') if ann.get('enabled') else '',
+                'enabled': bool(ann.get('enabled')) and bool(ann.get('text')),
+            }
+        })
+    except Exception:
+        return jsonify({'disabled_games': [], 'announcement': {'text': '', 'enabled': False}})
 
 
 

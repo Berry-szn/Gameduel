@@ -116,6 +116,12 @@
       <div class="tab" data-tab="pictionary">Pictionary<span class="count" id="c-pictionary"></span></div>
       <div class="tab" data-tab="footy">FootyMind<span class="count" id="c-footy"></span></div>
       <div class="tab" data-tab="geo">Geography<span class="count" id="c-geo"></span></div>
+      <div class="tab" data-tab="bulk">Bulk add</div>
+      <div class="tab" data-tab="players">Players</div>
+      <div class="tab" data-tab="games">Games</div>
+      <div class="tab" data-tab="announce">Announcement</div>
+      <div class="tab" data-tab="rooms">Live rooms</div>
+      <div class="tab" data-tab="backup">Backup</div>
     </div>
 
     <div id="global-msg" class="msg"></div>
@@ -319,6 +325,100 @@
       </div>
     </section>
 
+    <!-- BULK ADD -->
+    <section class="tabpane hidden" data-pane="bulk">
+      <div class="card">
+        <h2>Bulk add</h2>
+        <p class="hint">Paste many items at once, one per line, using <b>|</b> (pipe) to separate fields. Click <b>Preview</b> to check before adding.</p>
+        <label>What are you adding?</label>
+        <select id="bulk-kind">
+          <option value="trivia">Trivia (multiple choice)</option>
+          <option value="pictionary">Pictionary puzzles</option>
+        </select>
+        <div id="bulk-format-trivia" class="hint" style="margin-top:8px;">
+          Format: <code>category | question | correct answer | wrong1 | wrong2 | wrong3</code><br>
+          Categories: football, geography, science, movies, music, history, pop<br>
+          Example: <code>science | What is the largest planet? | Jupiter | Mars | Earth | Venus</code>
+        </div>
+        <div id="bulk-format-pictionary" class="hint hidden" style="margin-top:8px;">
+          Format: <code>emoji | answer | category</code><br>
+          Example: <code>🌙🚶 | moonwalk | word</code>
+        </div>
+        <label>Paste your lines</label>
+        <textarea id="bulk-text" style="min-height:160px;" placeholder="One item per line…"></textarea>
+        <div class="row" style="margin-top:12px;">
+          <button class="btn btn-ghost" id="bulk-preview" style="flex:0 0 auto;">Preview</button>
+          <button class="btn btn-primary" id="bulk-submit" style="flex:0 0 auto;" disabled>Add all valid</button>
+        </div>
+        <div id="bulk-preview-out" style="margin-top:12px;"></div>
+      </div>
+    </section>
+
+    <!-- PLAYERS -->
+    <section class="tabpane hidden" data-pane="players">
+      <div class="card">
+        <h2>Players (<span id="pl-count">0</span>)</h2>
+        <p class="hint">All player profiles, highest XP first. Reset wipes their progress; delete removes them entirely.</p>
+        <button class="btn btn-ghost btn-sm" id="pl-refresh">Refresh</button>
+        <div id="pl-list" style="margin-top:12px;"></div>
+      </div>
+      <div class="card">
+        <h2>Banned names (<span id="ban-count">0</span>)</h2>
+        <p class="hint">Players can't join a game using a banned name. Note: this blocks the exact name only — a determined user can pick a different one.</p>
+        <div class="row">
+          <input type="text" id="ban-input" placeholder="Name to ban">
+          <button class="btn btn-primary" id="ban-add" style="flex:0 0 auto;">Ban</button>
+        </div>
+        <div id="ban-list" style="margin-top:12px;"></div>
+      </div>
+    </section>
+
+    <!-- GAMES -->
+    <section class="tabpane hidden" data-pane="games">
+      <div class="card">
+        <h2>Enable / disable games</h2>
+        <p class="hint">Turned-off games disappear from everyone's home screen and can't be started. Built-in content and progress are untouched.</p>
+        <div id="games-list"></div>
+      </div>
+    </section>
+
+    <!-- ANNOUNCEMENT -->
+    <section class="tabpane hidden" data-pane="announce">
+      <div class="card">
+        <h2>Home-screen announcement</h2>
+        <p class="hint">Shows a banner at the top of everyone's home screen. Leave the box unticked to hide it.</p>
+        <label>Message</label>
+        <textarea id="ann-text" placeholder="e.g. New games added! 🎉  •  Server maintenance Sunday 9pm"></textarea>
+        <label style="display:flex; align-items:center; gap:8px; margin-top:12px;">
+          <input type="checkbox" id="ann-enabled" style="width:auto;"> Show this banner to players
+        </label>
+        <button class="btn btn-primary" id="ann-save" style="margin-top:14px;">Save announcement</button>
+        <div style="margin-top:14px;">
+          <div class="hint">Preview:</div>
+          <div id="ann-preview" style="margin-top:6px; padding:10px 14px; border-radius:9px; background:var(--primary-soft); color:var(--primary-dark); font-weight:600; display:none;"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- LIVE ROOMS -->
+    <section class="tabpane hidden" data-pane="rooms">
+      <div class="card">
+        <h2>Live rooms (<span id="rooms-count">0</span>)</h2>
+        <p class="hint">Game rooms currently active on the server. Close a stuck room to free it.</p>
+        <button class="btn btn-ghost btn-sm" id="rooms-refresh">Refresh</button>
+        <div id="rooms-list" style="margin-top:12px;"></div>
+      </div>
+    </section>
+
+    <!-- BACKUP -->
+    <section class="tabpane hidden" data-pane="backup">
+      <div class="card">
+        <h2>Export / backup</h2>
+        <p class="hint">Downloads everything — all player profiles, your added content, and settings — as a single JSON file. Keep it somewhere safe as a backup of your data.</p>
+        <button class="btn btn-primary" id="backup-download">Download backup (.json)</button>
+      </div>
+    </section>
+
   </div>
 </div>
 
@@ -518,6 +618,180 @@ $('gl-add').onclick = async ()=>{
   if(status===200){ flash($('global-msg'),'Landmark added ✓',true); $('gl-name').value=''; $('gl-country').value=''; $('gl-url').value=''; $('gl-test-img').style.display='none'; $('gl-test-status').textContent=''; loadAll(); }
   else flash($('global-msg'), data.error||'Failed', false);
 };
+
+// ===== BULK ADD =====
+function bulkFormatToggle(){
+  const k = $('bulk-kind').value;
+  $('bulk-format-trivia').classList.toggle('hidden', k!=='trivia');
+  $('bulk-format-pictionary').classList.toggle('hidden', k!=='pictionary');
+  $('bulk-preview-out').innerHTML=''; $('bulk-submit').disabled=true;
+}
+$('bulk-kind').onchange = bulkFormatToggle;
+
+let bulkParsed = [];
+function parseBulk(){
+  const kind = $('bulk-kind').value;
+  const lines = $('bulk-text').value.split('\n').map(l=>l.trim()).filter(Boolean);
+  const ok=[], bad=[];
+  lines.forEach((line, i)=>{
+    const parts = line.split('|').map(p=>p.trim());
+    if(kind==='trivia'){
+      if(parts.length<4){ bad.push({line:i+1, text:line, why:'need at least: category | question | correct | wrong1'}); return; }
+      const [cat, q, correct, ...wrongs] = parts;
+      const opts = [correct, ...wrongs].filter(Boolean);
+      if(!q || opts.length<2){ bad.push({line:i+1, text:line, why:'missing question or options'}); return; }
+      ok.push({cat:cat||'pop', type:'mc', q, options:opts, answer:0, explain:''});
+    } else { // pictionary
+      if(parts.length<2){ bad.push({line:i+1, text:line, why:'need: emoji | answer'}); return; }
+      const [emoji, answer, category] = parts;
+      if(!emoji || !answer){ bad.push({line:i+1, text:line, why:'missing emoji or answer'}); return; }
+      ok.push({emoji, answer, category:category||'word', alternates:''});
+    }
+  });
+  return {ok, bad};
+}
+$('bulk-preview').onclick = ()=>{
+  const {ok, bad} = parseBulk();
+  bulkParsed = ok;
+  let html = `<div class="msg ${bad.length?'':'ok'}" style="display:block;">${ok.length} valid, ${bad.length} with problems</div>`;
+  if(ok.length){
+    html += '<div class="hint" style="margin:8px 0 4px;">Will add:</div>';
+    ok.slice(0,10).forEach(it=>{
+      html += `<div class="item"><div class="item-main"><div class="t">${esc(it.q||it.emoji+' → '+it.answer)}</div></div></div>`;
+    });
+    if(ok.length>10) html += `<div class="hint">…and ${ok.length-10} more</div>`;
+  }
+  if(bad.length){
+    html += '<div class="hint" style="margin:8px 0 4px; color:var(--danger);">Skipped (fix these lines):</div>';
+    bad.forEach(b=>{ html += `<div class="item" style="border-color:var(--danger-soft);"><div class="item-main"><div class="t">Line ${b.line}: ${esc(b.why)}</div><div class="s">${esc(b.text)}</div></div></div>`; });
+  }
+  $('bulk-preview-out').innerHTML = html;
+  $('bulk-submit').disabled = ok.length===0;
+};
+$('bulk-submit').onclick = async ()=>{
+  if(!bulkParsed.length) return;
+  const kind = $('bulk-kind').value;
+  const {status, data} = await api(`/api/admin/bulk/${kind}`, {method:'POST', body:JSON.stringify({items:bulkParsed})});
+  if(status===200){
+    flash($('global-msg'), `Added ${data.added} item(s)${data.rejected_count?(', '+data.rejected_count+' rejected by server'):''} ✓`, true);
+    $('bulk-text').value=''; $('bulk-preview-out').innerHTML=''; $('bulk-submit').disabled=true;
+    bulkParsed=[]; loadAll();
+  } else flash($('global-msg'), data.error||'Bulk add failed', false);
+};
+
+// ===== PLAYERS =====
+async function loadPlayers(){
+  const {data} = await api('/api/admin/players');
+  const players = (data && data.players) || [];
+  $('pl-count').textContent = players.length;
+  const c = $('pl-list'); c.innerHTML='';
+  if(!players.length){ c.innerHTML='<p class="hint">No players yet.</p>'; }
+  players.forEach(p=>{
+    const div = document.createElement('div'); div.className='item';
+    div.innerHTML = `<div class="item-main"><div class="t">${esc(p.name)}</div><div class="s">Lvl ${p.level} · ${p.xp} XP · ${p.games_played} games · ${p.wins}W/${p.losses}L</div></div>`;
+    const wrap = document.createElement('div'); wrap.style.display='flex'; wrap.style.gap='6px';
+    const reset = document.createElement('button'); reset.className='btn btn-ghost btn-sm'; reset.textContent='Reset';
+    reset.onclick = async ()=>{ if(!confirm(`Reset ${p.name}'s progress to zero?`)) return; await api(`/api/admin/players/${encodeURIComponent(p.key)}/reset`,{method:'POST'}); loadPlayers(); };
+    const del = document.createElement('button'); del.className='btn btn-danger'; del.textContent='Delete';
+    del.onclick = async ()=>{ if(!confirm(`Permanently delete ${p.name}? This cannot be undone.`)) return; await api(`/api/admin/players/${encodeURIComponent(p.key)}`,{method:'DELETE'}); loadPlayers(); };
+    wrap.appendChild(reset); wrap.appendChild(del); div.appendChild(wrap);
+    c.appendChild(div);
+  });
+}
+$('pl-refresh').onclick = loadPlayers;
+
+async function loadBans(){
+  const {data} = await api('/api/admin/bans');
+  const bans = (data && data.banned_names) || [];
+  $('ban-count').textContent = bans.length;
+  const c = $('ban-list'); c.innerHTML='';
+  if(!bans.length){ c.innerHTML='<p class="hint">No banned names.</p>'; }
+  bans.forEach(n=>{
+    const div=document.createElement('div'); div.className='item';
+    div.innerHTML = `<div class="item-main"><div class="t">${esc(n)}</div></div>`;
+    const del=document.createElement('button'); del.className='btn btn-danger'; del.textContent='Unban';
+    del.onclick = async ()=>{ await api(`/api/admin/bans/${encodeURIComponent(n)}`,{method:'DELETE'}); loadBans(); };
+    div.appendChild(del); c.appendChild(div);
+  });
+}
+$('ban-add').onclick = async ()=>{
+  const name = $('ban-input').value.trim();
+  if(!name) return;
+  await api('/api/admin/bans',{method:'POST', body:JSON.stringify({name})});
+  $('ban-input').value=''; loadBans();
+};
+
+// ===== GAMES =====
+const GAME_LABELS = {guessduel:'GuessDuel', wordchain:'WordChain', oneshot:'OneShot', footymind:'FootyMind', trivia:'TriviaRush', geography:'Geography', timeshot:'TimeShot', halfit:'HalfIt', angle:'Angle', pictionary:'Pictionary'};
+async function loadGames(){
+  const {data} = await api('/api/admin/games');
+  const games = (data && data.games) || []; const disabled = (data && data.disabled) || [];
+  const c = $('games-list'); c.innerHTML='';
+  games.forEach(g=>{
+    const off = disabled.includes(g);
+    const div = document.createElement('div'); div.className='item';
+    div.innerHTML = `<div class="item-main"><div class="t">${esc(GAME_LABELS[g]||g)}</div><div class="s">${off?'<span style="color:var(--danger)">Disabled</span>':'<span style="color:var(--success)">Enabled</span>'}</div></div>`;
+    const btn = document.createElement('button');
+    btn.className = off ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm';
+    btn.textContent = off ? 'Enable' : 'Disable';
+    btn.onclick = async ()=>{ await api(`/api/admin/games/${g}`,{method:'POST', body:JSON.stringify({disabled:!off})}); loadGames(); };
+    div.appendChild(btn); c.appendChild(div);
+  });
+}
+
+// ===== ANNOUNCEMENT =====
+function renderAnnPreview(){
+  const text = $('ann-text').value.trim(); const on = $('ann-enabled').checked;
+  const p = $('ann-preview');
+  if(on && text){ p.style.display='block'; p.textContent=text; } else { p.style.display='none'; }
+}
+$('ann-text').addEventListener('input', renderAnnPreview);
+$('ann-enabled').addEventListener('change', renderAnnPreview);
+async function loadAnnouncement(){
+  const {data} = await api('/api/admin/announcement');
+  if(data){ $('ann-text').value = data.text||''; $('ann-enabled').checked = !!data.enabled; renderAnnPreview(); }
+}
+$('ann-save').onclick = async ()=>{
+  const {status,data} = await api('/api/admin/announcement',{method:'POST', body:JSON.stringify({text:$('ann-text').value.trim(), enabled:$('ann-enabled').checked})});
+  if(status===200) flash($('global-msg'),'Announcement saved ✓',true);
+  else flash($('global-msg'), (data&&data.error)||'Failed', false);
+};
+
+// ===== LIVE ROOMS =====
+async function loadRooms(){
+  const {data} = await api('/api/admin/rooms');
+  const rooms = (data && data.rooms) || [];
+  $('rooms-count').textContent = rooms.length;
+  const c = $('rooms-list'); c.innerHTML='';
+  if(!rooms.length){ c.innerHTML='<p class="hint">No active rooms right now.</p>'; }
+  rooms.forEach(rm=>{
+    const div=document.createElement('div'); div.className='item';
+    const names = rm.player_names && rm.player_names.length ? rm.player_names.join(', ') : '(empty)';
+    div.innerHTML = `<div class="item-main"><div class="t">${esc(rm.code)} · ${esc(GAME_LABELS[rm.game_type]||rm.game_type)}</div><div class="s">${rm.players} player(s): ${esc(names)} · ${esc(rm.phase)} · idle ${rm.idle_sec}s</div></div>`;
+    const del=document.createElement('button'); del.className='btn btn-danger'; del.textContent='Close';
+    del.onclick = async ()=>{ if(!confirm(`Close room ${rm.code}? Players in it will be kicked out.`)) return; await api(`/api/admin/rooms/${rm.code}`,{method:'DELETE'}); loadRooms(); };
+    div.appendChild(del); c.appendChild(div);
+  });
+}
+$('rooms-refresh').onclick = loadRooms;
+
+// ===== BACKUP =====
+$('backup-download').onclick = ()=>{
+  // Trigger a browser download of the export endpoint
+  window.location.href = '/api/admin/export';
+};
+
+// Load the right data when a tab is opened
+document.querySelectorAll('.tab').forEach(t=>{
+  t.addEventListener('click', ()=>{
+    const name = t.dataset.tab;
+    if(name==='players'){ loadPlayers(); loadBans(); }
+    else if(name==='games'){ loadGames(); }
+    else if(name==='announce'){ loadAnnouncement(); }
+    else if(name==='rooms'){ loadRooms(); }
+    else if(name==='bulk'){ bulkFormatToggle(); }
+  });
+});
 
 init();
 </script>
