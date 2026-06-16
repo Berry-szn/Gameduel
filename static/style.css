@@ -3800,3 +3800,11 @@ main {
     color: var(--success, #198754);
     margin: 6px 0 4px;
 }
+
+/* Landing-screen Google Sign-In button — center the fixed-width GSI button */
+.landing-gsi {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 10px;
+    min-height: 44px;
+}

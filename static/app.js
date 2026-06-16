@@ -2545,12 +2545,6 @@ function wireLanding() {
             }
         };
     }
-    const signinBtn = $('btn-landing-signin');
-    if (signinBtn) {
-        signinBtn.onclick = () => {
-            toast('Sign-in is coming soon. Use guest for now.');
-        };
-    }
     // Home-screen Players-online button (always visible, not buried in menu)
     const homeOnline = $('home-online-btn');
     if (homeOnline) {
@@ -6275,13 +6269,17 @@ function setupGoogleSignIn() {
             client_id: State.googleClientId,
             callback: onGoogleCredential,
         });
-        const btn = document.getElementById('google-signin-btn');
-        if (btn) {
-            window.google.accounts.id.renderButton(btn, {
-                theme: 'outline', size: 'large', text: 'signin_with',
-                shape: 'pill', logo_alignment: 'left',
-            });
-        }
+        // Render the official Google button into every container that exists
+        // (the landing screen and the home-screen profile card).
+        ['google-signin-btn', 'google-signin-btn-landing'].forEach(id => {
+            const btn = document.getElementById(id);
+            if (btn) {
+                window.google.accounts.id.renderButton(btn, {
+                    theme: 'outline', size: 'large', text: 'signin_with',
+                    shape: 'pill', logo_alignment: 'left',
+                });
+            }
+        });
     } catch (e) {
         debugLog && debugLog('google init failed: ' + e);
     }
@@ -6318,6 +6316,11 @@ async function onGoogleCredential(resp) {
         // Hide the sign-in button
         const signinWrap = document.getElementById('google-signin-wrap');
         if (signinWrap) signinWrap.classList.add('hidden');
+        // If the user signed in from the landing screen, advance into the app.
+        const landing = document.getElementById('screen-landing');
+        if (landing && landing.classList.contains('active')) {
+            showScreen('screen-home');
+        }
     } catch (e) {
         alert('Google sign-in error. Please try again.');
     }
