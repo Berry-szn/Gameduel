@@ -174,7 +174,9 @@ def fresh_profile(name: str) -> dict:
         'achievements': [],
         'daily_completed': {},      # date_str -> {guesses, time_sec, secret, won}
         'last_played_at': None,
-        'xp_by_game': {}            # 'guessduel': 320, 'wordchain': 180 ...
+        'xp_by_game': {},           # 'guessduel': 320, 'wordchain': 180 ...
+        'email': None,              # set when signed in with Google
+        'auth_provider': None       # 'google' for signed-in users, else None
     }
 
 
@@ -799,6 +801,8 @@ def build_state_snapshot(state: dict, code: str, for_sid: str) -> dict:
         'halfit': state.get('halfit'),
         'angle': state.get('angle'),
         'pict': pict_public_state(state.get('pict')) if state.get('pict') else None,
+        'trivia': trivia_public_state(state.get('trivia'), state['phase']) if state.get('trivia') else None,
+        'footy': footy_public_state(state.get('footy'), state['phase']) if state.get('footy') else None,
         'match_history': state.get('match_history', [])[-10:],
         'me': {
             'sid': for_sid,
@@ -2241,7 +2245,7 @@ def on_create_room(data=None):
     mode_hint = 'group'
     if data and isinstance(data, dict):
         gt = data.get('game_type')
-        if gt in ('guessduel', 'wordchain', 'timeshot', 'geography', 'halfit', 'angle', 'pictionary'):
+        if gt in ('guessduel', 'wordchain', 'timeshot', 'geography', 'halfit', 'angle', 'pictionary', 'trivia', 'footymind'):
             game_type = gt
         mh = data.get('mode_hint')
         if mh in ('faceoff', 'group', 'solo'):
@@ -2520,6 +2524,58 @@ def on_start_game(data):
             geo_init_match(state, mode, total_rounds, difficulty)
             touch_room(room)
             geo_start_round(room)
+            return
+
+        # TriviaRush multiplayer dispatch (faceoff / group; solo uses HTTP)
+        if state.get('game_type') == 'trivia':
+            cats = data.get('categories') or []
+            if not isinstance(cats, list):
+                cats = []
+            cats = [c for c in cats if isinstance(c, str)][:10]
+            total_rounds = int(data.get('total_rounds', 10))
+            if total_rounds not in (10, 20):
+                total_rounds = 10 if total_rounds < 15 else 20
+            humans = [p for p in state['players'].values()
+                      if not p.get('is_bot') and not p.get('is_spectator')]
+            if len(humans) < 2:
+                emit('error_msg', {'msg': 'TriviaRush multiplayer needs at least 2 players'})
+                return
+            # Make sure the chosen categories actually have enough mc/tf questions
+            test_q = trivia_mp_pick_question(cats, set())
+            if not test_q:
+                emit('error_msg', {'msg': 'Not enough questions in those categories. Pick more.'})
+                return
+            state['settings']['mode'] = state.get('mode_hint', 'group')
+            state['last_start_args'] = {
+                'game_type': 'trivia', 'mode': state['settings']['mode'],
+                'categories': cats, 'total_rounds': total_rounds
+            }
+            trivia_init_match(state, cats, total_rounds)
+            touch_room(room)
+            trivia_start_round(room)
+            return
+
+        # FootyMind multiplayer dispatch (faceoff / group; solo uses HTTP)
+        if state.get('game_type') == 'footymind':
+            difficulty = (data.get('fm_difficulty') or 'easy').lower()
+            if difficulty not in ('easy', 'medium', 'hard'):
+                difficulty = 'easy'
+            total_rounds = int(data.get('total_rounds', 10))
+            if total_rounds not in (10, 20):
+                total_rounds = 10 if total_rounds < 15 else 20
+            humans = [p for p in state['players'].values()
+                      if not p.get('is_bot') and not p.get('is_spectator')]
+            if len(humans) < 2:
+                emit('error_msg', {'msg': 'FootyMind multiplayer needs at least 2 players'})
+                return
+            state['settings']['mode'] = state.get('mode_hint', 'group')
+            state['last_start_args'] = {
+                'game_type': 'footymind', 'mode': state['settings']['mode'],
+                'fm_difficulty': difficulty, 'total_rounds': total_rounds
+            }
+            footy_init_match(state, difficulty, total_rounds)
+            touch_room(room)
+            footy_start_round(room)
             return
 
         # HalfIt dispatch — works in solo, faceoff, or group mode
@@ -3792,7 +3848,7 @@ def on_mindmeld_rematch():
 def api_version():
     """Return current build tag. Client polls and reloads if its loaded
     version doesn't match — catches stale browser/edge caches."""
-    return jsonify({'version': 'v34'})
+    return jsonify({'version': 'v37'})
 
 
 def _no_cache_html(resp):
@@ -4306,6 +4362,534 @@ def on_geo_submit_answer(data=None):
         human_sids = [s for s, p in state['players'].items() if not p.get('is_bot')]
         if all(s in geo['round_answers'] for s in human_sids):
             geo_end_round(room)
+
+
+# =========================================================================
+# TRIVIARUSH MULTIPLAYER — faceoff / group quiz race
+#   Mirrors the Geography MP flow:
+#   1) init_match builds state['trivia'] with scores + round tracking
+#   2) start_round picks a question (mc or tf), broadcasts it WITHOUT the
+#      answer, sets a deadline, schedules an auto-advance
+#   3) players submit an option index; correct answers earn base + speed bonus
+#   4) round ends when all answer or the timer expires -> reveal -> next round
+#   5) after the last round -> final standings + XP to the winner(s)
+#   Solo trivia stays on the existing HTTP flow; this is for 2+ humans.
+# =========================================================================
+
+TRIVIA_ROUND_SECONDS = 20       # time to answer each question
+TRIVIA_ROUND_END_DELAY = 4      # reveal screen duration before next question
+TRIVIA_CORRECT_BASE = 100       # base points for a correct answer
+TRIVIA_SPEED_MULT = 5           # speed bonus = (time left) * mult
+
+
+def trivia_mp_normalize(q: dict) -> dict:
+    """Turn a raw trivia_questions entry into a normalized MP question with a
+    flat options list + correct index. Returns None for unsupported types."""
+    t = q.get('type')
+    if t == 'mc':
+        opts = list(q.get('options') or [])
+        ans = q.get('answer')
+        if not isinstance(ans, int) or ans < 0 or ans >= len(opts) or len(opts) < 2:
+            return None
+        return {'q': q.get('q', ''), 'cat': q.get('cat', ''), 'type': 'mc',
+                'options': opts, 'answer_index': ans,
+                'explain': q.get('explain', '')}
+    if t == 'tf':
+        is_true = bool(q.get('answer'))
+        return {'q': q.get('q', ''), 'cat': q.get('cat', ''), 'type': 'tf',
+                'options': ['True', 'False'], 'answer_index': 0 if is_true else 1,
+                'explain': q.get('explain', '')}
+    return None   # 'older' and anything else not supported in MP
+
+
+def trivia_mp_pick_question(categories, used_ids: set):
+    """Pick one random normalized mc/tf question, filtered by categories and
+    excluding already-used question texts. Returns None if the pool is empty."""
+    try:
+        import trivia_questions as tq
+        pool = tq.QUESTIONS
+    except Exception:
+        return None
+    cands = []
+    for q in pool:
+        if q.get('type') not in ('mc', 'tf'):
+            continue
+        if categories and q.get('cat') not in categories:
+            continue
+        qid = q.get('q', '')[:60]
+        if qid in used_ids:
+            continue
+        cands.append(q)
+    if not cands:
+        return None
+    raw = random.choice(cands)
+    norm = trivia_mp_normalize(raw)
+    if not norm:
+        return None
+    norm['id'] = raw.get('q', '')[:60]
+    return norm
+
+
+def trivia_init_match(state: dict, categories, total_rounds: int):
+    state['phase'] = 'trivia_round'
+    state['game_type'] = 'trivia'
+    state['trivia'] = {
+        'categories': list(categories) if categories else [],
+        'round_number': 0,
+        'total_rounds': max(1, min(20, int(total_rounds))),
+        'current_q': None,
+        'round_started_at': 0.0,
+        'round_deadline': 0.0,
+        'round_answers': {},
+        'scores': {sid: 0 for sid, p in state['players'].items() if not p.get('is_bot')},
+        'used_ids': [],
+        'final_ranking': [],
+        'winners': [],
+    }
+    state['round_number'] = 0
+
+
+def trivia_start_round(room: dict):
+    state = room['state']
+    tv = state.get('trivia')
+    if not tv:
+        return
+    tv['round_number'] += 1
+    state['round_number'] = tv['round_number']
+    used = set(tv.get('used_ids', []))
+    q = trivia_mp_pick_question(tv.get('categories'), used)
+    if not q:
+        # Pool exhausted (e.g. too few questions in the chosen categories) ->
+        # end the match early rather than hang.
+        trivia_end_match(room)
+        return
+    tv['current_q'] = q
+    tv['used_ids'].append(q['id'])
+    tv['round_started_at'] = time.time()
+    tv['round_deadline'] = time.time() + TRIVIA_ROUND_SECONDS
+    tv['round_answers'] = {}
+    state['phase'] = 'trivia_round'
+    broadcast_state(state, room['code'])
+    expected_round = tv['round_number']
+    def _auto_end():
+        socketio.sleep(TRIVIA_ROUND_SECONDS + 0.3)
+        with room['lock']:
+            cur = room['state'].get('trivia')
+            if (cur and cur.get('round_number') == expected_round
+                    and room['state'].get('phase') == 'trivia_round'):
+                trivia_end_round(room)
+    socketio.start_background_task(_auto_end)
+
+
+def trivia_end_round(room: dict):
+    state = room['state']
+    tv = state.get('trivia')
+    if not tv:
+        return
+    if state.get('phase') != 'trivia_round':
+        return
+    state['phase'] = 'trivia_round_end'
+    broadcast_state(state, room['code'])
+    expected_round = tv['round_number']
+    def _advance():
+        socketio.sleep(TRIVIA_ROUND_END_DELAY)
+        with room['lock']:
+            cur = room['state'].get('trivia')
+            if not cur:
+                return
+            if cur.get('round_number') != expected_round:
+                return
+            if room['state'].get('phase') != 'trivia_round_end':
+                return
+            if cur['round_number'] >= cur['total_rounds']:
+                trivia_end_match(room)
+            else:
+                trivia_start_round(room)
+    socketio.start_background_task(_advance)
+
+
+def trivia_end_match(room: dict):
+    state = room['state']
+    tv = state.get('trivia')
+    if not tv:
+        return
+    state['phase'] = 'game_over'
+    scores = tv.get('scores', {})
+    if not scores:
+        winners = []
+    else:
+        top = max(scores.values())
+        winners = [sid for sid, sc in scores.items() if sc == top and sc > 0]
+    ranking = []
+    for sid, sc in sorted(scores.items(), key=lambda kv: -kv[1]):
+        p = state['players'].get(sid)
+        if not p:
+            continue
+        ranking.append({'sid': sid, 'name': p['name'], 'score': sc,
+                        'is_bot': bool(p.get('is_bot'))})
+    tv['final_ranking'] = ranking
+    tv['winners'] = winners
+
+    for wsid in winners:
+        wp_player = state['players'].get(wsid)
+        if not wp_player or wp_player.get('is_bot'):
+            continue
+        try:
+            wp = get_profile(wp_player['name'], wp_player.get('user_id'))
+            wp['wins'] = (wp.get('wins', 0) or 0) + 1
+            wp['games_played'] = (wp.get('games_played', 0) or 0) + 1
+            wp['current_streak'] = (wp.get('current_streak', 0) or 0) + 1
+            if wp['current_streak'] > (wp.get('best_streak', 0) or 0):
+                wp['best_streak'] = wp['current_streak']
+            grant_xp(wp, 50 * MP_XP_MULTIPLIER, game_type='trivia',
+                     coins=10 * MP_COIN_MULTIPLIER)
+            mark_profiles_dirty()
+        except Exception as e:
+            print(f"[trivia_end_match] win-award failed: {e}")
+    for sid, p in state['players'].items():
+        if p.get('is_bot') or sid in winners:
+            continue
+        try:
+            losep = get_profile(p['name'], p.get('user_id'))
+            losep['games_played'] = (losep.get('games_played', 0) or 0) + 1
+            losep['losses'] = (losep.get('losses', 0) or 0) + 1
+            losep['current_streak'] = 0
+            mark_profiles_dirty()
+        except Exception as e:
+            print(f"[trivia_end_match] loss-record failed: {e}")
+
+    socketio.emit('game_over', {
+        'game_type': 'trivia',
+        'final_ranking': ranking,
+        'winners': [{'sid': w, 'name': state['players'][w]['name']}
+                    for w in winners if w in state['players']]
+    }, room=room['code'])
+    broadcast_state(state, room['code'])
+
+
+def trivia_public_state(tv: dict, phase: str) -> dict:
+    """Client-safe view of trivia state. Hides the correct answer while the
+    round is live; reveals it (and per-player results) at round end."""
+    if not tv:
+        return None
+    q = tv.get('current_q') or {}
+    reveal = (phase == 'trivia_round_end' or phase == 'game_over')
+    pub_q = None
+    if q:
+        pub_q = {
+            'q': q.get('q', ''),
+            'cat': q.get('cat', ''),
+            'type': q.get('type', 'mc'),
+            'options': q.get('options', []),
+        }
+        if reveal:
+            pub_q['answer_index'] = q.get('answer_index')
+            pub_q['explain'] = q.get('explain', '')
+    return {
+        'round_number': tv.get('round_number', 0),
+        'total_rounds': tv.get('total_rounds', 0),
+        'question': pub_q,
+        'round_deadline': tv.get('round_deadline', 0.0),
+        'round_seconds': TRIVIA_ROUND_SECONDS,
+        'scores': tv.get('scores', {}),
+        # round_answers only at reveal (so others' choices aren't shown live)
+        'round_answers': tv.get('round_answers', {}) if reveal else {
+            sid: {'answered': True} for sid in tv.get('round_answers', {})
+        },
+        'final_ranking': tv.get('final_ranking', []),
+        'winners': tv.get('winners', []),
+    }
+
+
+@socketio.on('trivia_submit_answer')
+def on_trivia_submit_answer(data=None):
+    sid = request.sid
+    if not isinstance(data, dict):
+        return
+    try:
+        choice = int(data.get('choice'))
+    except (TypeError, ValueError):
+        return
+    room, code = _get_room_for_sid(sid)
+    if not room:
+        return
+    with room['lock']:
+        state = room['state']
+        if state.get('game_type') != 'trivia':
+            return
+        if state.get('phase') != 'trivia_round':
+            return
+        tv = state.get('trivia') or {}
+        if sid in tv.get('round_answers', {}):
+            return   # already answered
+        q = tv.get('current_q')
+        if not q:
+            return
+        correct = (choice == q.get('answer_index'))
+        elapsed = max(0.1, time.time() - (tv.get('round_started_at') or time.time()))
+        if correct:
+            time_left = max(0.0, TRIVIA_ROUND_SECONDS - elapsed)
+            score_delta = TRIVIA_CORRECT_BASE + int(time_left * TRIVIA_SPEED_MULT)
+        else:
+            score_delta = 0
+        tv['round_answers'][sid] = {
+            'choice': choice,
+            'time': round(elapsed, 2),
+            'correct': correct,
+            'score_delta': score_delta,
+        }
+        tv['scores'][sid] = (tv['scores'].get(sid, 0) or 0) + score_delta
+        broadcast_state(state, code)
+        human_sids = [s for s, p in state['players'].items() if not p.get('is_bot')]
+        if all(s in tv['round_answers'] for s in human_sids):
+            trivia_end_round(room)
+
+
+# =========================================================================
+# FOOTYMIND MULTIPLAYER — faceoff / group "guess the footballer"
+#   Same flow as TriviaRush MP, but the "question" is a career path and the
+#   answer is a TYPED player name (matched via lookup_player, the same fuzzy
+#   alias matcher the solo mode uses). Solo FootyMind stays on HTTP.
+# =========================================================================
+
+FOOTY_ROUND_SECONDS = 25        # typing a name takes longer than tapping
+FOOTY_ROUND_END_DELAY = 4
+FOOTY_CORRECT_BASE = 100
+FOOTY_SPEED_MULT = 4
+
+
+def footy_mp_pick_player(difficulty: str, used_names: set):
+    """Pick one player not yet used, at the given difficulty (padded from the
+    full pool if sparse). Returns a dict incl. the canonical name (server-side)."""
+    try:
+        from footy_players import get_players_by_difficulty, PLAYERS
+    except Exception:
+        return None
+    pool = get_players_by_difficulty(difficulty)
+    if len(pool) < 1:
+        pool = list(PLAYERS)
+    cands = [p for p in pool if p.get('name') and p['name'] not in used_names]
+    if not cands:
+        # everyone at this difficulty used -> allow the full pool
+        cands = [p for p in PLAYERS if p.get('name') and p['name'] not in used_names]
+    if not cands:
+        return None
+    p = random.choice(cands)
+    return {
+        'name': p['name'],   # server-side only (the answer)
+        'nationality': p.get('nationality', ''),
+        'position': p.get('position', ''),
+        'difficulty': p.get('difficulty', difficulty),
+        'path': [{'years': yrs, 'club': club} for (yrs, club) in p.get('path', [])],
+    }
+
+
+def footy_init_match(state: dict, difficulty: str, total_rounds: int):
+    state['phase'] = 'footy_round'
+    state['game_type'] = 'footymind'
+    state['footy'] = {
+        'difficulty': difficulty,
+        'round_number': 0,
+        'total_rounds': max(1, min(20, int(total_rounds))),
+        'current_player': None,
+        'round_started_at': 0.0,
+        'round_deadline': 0.0,
+        'round_answers': {},
+        'scores': {sid: 0 for sid, p in state['players'].items() if not p.get('is_bot')},
+        'used_names': [],
+        'final_ranking': [],
+        'winners': [],
+    }
+    state['round_number'] = 0
+
+
+def footy_start_round(room: dict):
+    state = room['state']
+    fm = state.get('footy')
+    if not fm:
+        return
+    fm['round_number'] += 1
+    state['round_number'] = fm['round_number']
+    used = set(fm.get('used_names', []))
+    player = footy_mp_pick_player(fm.get('difficulty', 'easy'), used)
+    if not player:
+        footy_end_match(room)
+        return
+    fm['current_player'] = player
+    fm['used_names'].append(player['name'])
+    fm['round_started_at'] = time.time()
+    fm['round_deadline'] = time.time() + FOOTY_ROUND_SECONDS
+    fm['round_answers'] = {}
+    state['phase'] = 'footy_round'
+    broadcast_state(state, room['code'])
+    expected_round = fm['round_number']
+    def _auto_end():
+        socketio.sleep(FOOTY_ROUND_SECONDS + 0.3)
+        with room['lock']:
+            cur = room['state'].get('footy')
+            if (cur and cur.get('round_number') == expected_round
+                    and room['state'].get('phase') == 'footy_round'):
+                footy_end_round(room)
+    socketio.start_background_task(_auto_end)
+
+
+def footy_end_round(room: dict):
+    state = room['state']
+    fm = state.get('footy')
+    if not fm:
+        return
+    if state.get('phase') != 'footy_round':
+        return
+    state['phase'] = 'footy_round_end'
+    broadcast_state(state, room['code'])
+    expected_round = fm['round_number']
+    def _advance():
+        socketio.sleep(FOOTY_ROUND_END_DELAY)
+        with room['lock']:
+            cur = room['state'].get('footy')
+            if not cur:
+                return
+            if cur.get('round_number') != expected_round:
+                return
+            if room['state'].get('phase') != 'footy_round_end':
+                return
+            if cur['round_number'] >= cur['total_rounds']:
+                footy_end_match(room)
+            else:
+                footy_start_round(room)
+    socketio.start_background_task(_advance)
+
+
+def footy_end_match(room: dict):
+    state = room['state']
+    fm = state.get('footy')
+    if not fm:
+        return
+    state['phase'] = 'game_over'
+    scores = fm.get('scores', {})
+    if not scores:
+        winners = []
+    else:
+        top = max(scores.values())
+        winners = [sid for sid, sc in scores.items() if sc == top and sc > 0]
+    ranking = []
+    for sid, sc in sorted(scores.items(), key=lambda kv: -kv[1]):
+        p = state['players'].get(sid)
+        if not p:
+            continue
+        ranking.append({'sid': sid, 'name': p['name'], 'score': sc,
+                        'is_bot': bool(p.get('is_bot'))})
+    fm['final_ranking'] = ranking
+    fm['winners'] = winners
+
+    for wsid in winners:
+        wp_player = state['players'].get(wsid)
+        if not wp_player or wp_player.get('is_bot'):
+            continue
+        try:
+            wp = get_profile(wp_player['name'], wp_player.get('user_id'))
+            wp['wins'] = (wp.get('wins', 0) or 0) + 1
+            wp['games_played'] = (wp.get('games_played', 0) or 0) + 1
+            wp['current_streak'] = (wp.get('current_streak', 0) or 0) + 1
+            if wp['current_streak'] > (wp.get('best_streak', 0) or 0):
+                wp['best_streak'] = wp['current_streak']
+            grant_xp(wp, 50 * MP_XP_MULTIPLIER, game_type='footymind',
+                     coins=10 * MP_COIN_MULTIPLIER)
+            mark_profiles_dirty()
+        except Exception as e:
+            print(f"[footy_end_match] win-award failed: {e}")
+    for sid, p in state['players'].items():
+        if p.get('is_bot') or sid in winners:
+            continue
+        try:
+            losep = get_profile(p['name'], p.get('user_id'))
+            losep['games_played'] = (losep.get('games_played', 0) or 0) + 1
+            losep['losses'] = (losep.get('losses', 0) or 0) + 1
+            losep['current_streak'] = 0
+            mark_profiles_dirty()
+        except Exception as e:
+            print(f"[footy_end_match] loss-record failed: {e}")
+
+    socketio.emit('game_over', {
+        'game_type': 'footymind',
+        'final_ranking': ranking,
+        'winners': [{'sid': w, 'name': state['players'][w]['name']}
+                    for w in winners if w in state['players']]
+    }, room=room['code'])
+    broadcast_state(state, room['code'])
+
+
+def footy_public_state(fm: dict, phase: str) -> dict:
+    """Client-safe view. Hides the player's NAME (the answer) during the round;
+    reveals it + per-player answers at round end."""
+    if not fm:
+        return None
+    p = fm.get('current_player') or {}
+    reveal = (phase == 'footy_round_end' or phase == 'game_over')
+    clue = None
+    if p:
+        clue = {
+            'nationality': p.get('nationality', ''),
+            'position': p.get('position', ''),
+            'path': p.get('path', []),
+        }
+        if reveal:
+            clue['name'] = p.get('name', '')
+    return {
+        'round_number': fm.get('round_number', 0),
+        'total_rounds': fm.get('total_rounds', 0),
+        'clue': clue,
+        'round_deadline': fm.get('round_deadline', 0.0),
+        'round_seconds': FOOTY_ROUND_SECONDS,
+        'scores': fm.get('scores', {}),
+        'round_answers': fm.get('round_answers', {}) if reveal else {
+            sid: {'answered': True} for sid in fm.get('round_answers', {})
+        },
+        'final_ranking': fm.get('final_ranking', []),
+        'winners': fm.get('winners', []),
+    }
+
+
+@socketio.on('footy_submit_answer')
+def on_footy_submit_answer(data=None):
+    sid = request.sid
+    if not isinstance(data, dict):
+        return
+    answer = (data.get('answer') or '').strip()[:60]
+    room, code = _get_room_for_sid(sid)
+    if not room:
+        return
+    with room['lock']:
+        state = room['state']
+        if state.get('game_type') != 'footymind':
+            return
+        if state.get('phase') != 'footy_round':
+            return
+        fm = state.get('footy') or {}
+        if sid in fm.get('round_answers', {}):
+            return
+        p = fm.get('current_player')
+        if not p:
+            return
+        matched = lookup_player(answer)            # fuzzy alias match
+        correct = (matched is not None and matched == p.get('name'))
+        elapsed = max(0.1, time.time() - (fm.get('round_started_at') or time.time()))
+        if correct:
+            time_left = max(0.0, FOOTY_ROUND_SECONDS - elapsed)
+            score_delta = FOOTY_CORRECT_BASE + int(time_left * FOOTY_SPEED_MULT)
+        else:
+            score_delta = 0
+        fm['round_answers'][sid] = {
+            'answer': answer,
+            'time': round(elapsed, 2),
+            'correct': correct,
+            'score_delta': score_delta,
+        }
+        fm['scores'][sid] = (fm['scores'].get(sid, 0) or 0) + score_delta
+        broadcast_state(state, code)
+        human_sids = [s for s, p2 in state['players'].items() if not p2.get('is_bot')]
+        if all(s in fm['round_answers'] for s in human_sids):
+            footy_end_round(room)
 
 
 # =========================================================================
@@ -5368,6 +5952,14 @@ import admin_content as _admin
 import hmac as _hmac
 
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '')
+
+# Google Sign-In: the OAuth Client ID. Public by design (it appears in the
+# client). Read from env var, falling back to the known project Client ID so
+# it works even if the env var isn't set. Token verification is done server
+# side against Google, so a forged token can't impersonate anyone.
+GOOGLE_CLIENT_ID = os.environ.get(
+    'GOOGLE_CLIENT_ID',
+    '708463902952-h14h0vaet38kd7lr0lsl3ttphrmsi0t2.apps.googleusercontent.com')
 # Secret for signing the admin cookie. Derived from the password + a constant
 # so it's stable across restarts without needing another env var.
 _ADMIN_COOKIE_NAME = 'gr_admin'
@@ -5613,7 +6205,69 @@ def admin_bulk(kind):
                     'rejected': errors, 'rejected_count': len(errors)})
 
 
-# ---- Game enable/disable ----
+@app.route('/api/admin/import/<kind>', methods=['POST'])
+def admin_import(kind):
+    """Import a CSV/XLSX question bank. Accepts a multipart file upload."""
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    if kind not in _admin.IMPORT_COLUMNS:
+        return jsonify({'error': 'bad kind'}), 400
+    f = request.files.get('file')
+    if not f or not f.filename:
+        return jsonify({'error': 'no file uploaded'}), 400
+    try:
+        data = f.read()
+        if len(data) > 5 * 1024 * 1024:
+            return jsonify({'error': 'file too large (max 5 MB)'}), 400
+        result = _admin.import_spreadsheet(kind, f.filename, data)
+    except Exception as e:
+        return jsonify({'error': f'could not read file: {e}'}), 400
+    refresh_all_admin_content()
+    return jsonify({'ok': True, 'added': result['added'],
+                    'rejected_count': result['rejected_count'],
+                    'errors': result['errors'][:30]})
+
+
+@app.route('/api/admin/template/<kind>', methods=['GET'])
+def admin_template(kind):
+    """Download a CSV template (with example rows) for a content kind."""
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    cols = _admin.IMPORT_COLUMNS.get(kind)
+    if not cols:
+        return jsonify({'error': 'bad kind'}), 400
+    examples = {
+        'trivia': [
+            ['science', 'What is the largest planet in our solar system?', 'Jupiter', 'Mars', 'Earth', 'Saturn', 'Jupiter is about 11x Earth\u2019s diameter'],
+            ['football', 'Which country won the 2022 World Cup?', 'Argentina', 'France', 'Brazil', 'Germany', 'Won on penalties vs France'],
+        ],
+        'pictionary': [
+            ['\U0001F319\U0001F6B6', 'moonwalk', 'word', 'moon walk'],
+            ['\U0001F525\U0001F692', 'fire truck', 'thing', ''],
+        ],
+        'footy': [
+            ['Lionel Messi', 'Argentina', 'Forward', 'easy', 'messi, la pulga', '2004-2021:Barcelona; 2021-2023:Paris Saint-Germain; 2023-now:Inter Miami'],
+            ['Steven Gerrard', 'England', 'Midfielder', 'medium', 'stevie g', '1998-2015:Liverpool; 2015-2016:LA Galaxy'],
+        ],
+        'geo_flag': [
+            ['Japan', 'jp', '', 'easy'],
+            ['Brazil', 'br', '', 'easy'],
+        ],
+        'geo_landmark': [
+            ['Eiffel Tower', 'France', 'https://upload.wikimedia.org/wikipedia/commons/a/a8/Tour_Eiffel_Wikimedia_Commons.jpg', 'easy'],
+            ['Great Wall', 'China', 'https://upload.wikimedia.org/wikipedia/commons/2/23/The_Great_Wall_of_China_at_Jinshanling-edit.jpg', 'medium'],
+        ],
+    }
+    import io, csv
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(cols)
+    for row in examples.get(kind, []):
+        w.writerow(row)
+    resp = make_response('\ufeff' + buf.getvalue())  # BOM so Excel opens UTF-8 cleanly
+    resp.headers['Content-Type'] = 'text/csv; charset=utf-8'
+    resp.headers['Content-Disposition'] = f'attachment; filename=gameroom_template_{kind}.csv'
+    return resp
 ALL_GAME_KEYS = ['guessduel', 'wordchain', 'oneshot', 'footymind', 'trivia',
                  'geography', 'timeshot', 'halfit', 'angle', 'pictionary']
 
@@ -5708,7 +6362,7 @@ def admin_export():
     content = {k: _admin.list_items(k) for k in _admin.KINDS}
     payload = {
         'exported_at': time.time(),
-        'version': 'v34',
+        'version': 'v37',
         'profiles': profiles,
         'admin_content': content,
         'settings': _admin.get_settings(),
@@ -5733,10 +6387,61 @@ def public_config():
             'announcement': {
                 'text': ann.get('text', '') if ann.get('enabled') else '',
                 'enabled': bool(ann.get('enabled')) and bool(ann.get('text')),
-            }
+            },
+            'google_client_id': GOOGLE_CLIENT_ID,
         })
     except Exception:
-        return jsonify({'disabled_games': [], 'announcement': {'text': '', 'enabled': False}})
+        return jsonify({'disabled_games': [], 'announcement': {'text': '', 'enabled': False},
+                        'google_client_id': GOOGLE_CLIENT_ID})
+
+
+@app.route('/api/auth/google', methods=['POST'])
+def auth_google():
+    """Verify a Google ID token (sent by the Sign-in-with-Google button) and
+    return a stable identity the client uses as its user_id. The profile is
+    keyed by the Google account's unique 'sub', so progress follows the user
+    across devices/browsers when signed in. Guests are unaffected.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    token = data.get('credential') or data.get('token') or ''
+    if not token:
+        return jsonify({'ok': False, 'error': 'no token'}), 400
+    try:
+        from google.oauth2 import id_token as _gid
+        from google.auth.transport import requests as _greq
+        info = _gid.verify_oauth2_token(token, _greq.Request(), GOOGLE_CLIENT_ID)
+        # info contains verified fields: sub (stable id), email, name, picture
+        sub = info.get('sub')
+        if not sub:
+            return jsonify({'ok': False, 'error': 'invalid token'}), 401
+        email = info.get('email', '')
+        name = info.get('name') or (email.split('@')[0] if email else 'Player')
+        picture = info.get('picture', '')
+        user_id = 'g_' + sub      # 'g_' prefix marks a Google-authed identity
+        # Ensure a profile exists and is keyed by this stable id.
+        p = get_profile(name[:20], user_id=user_id)
+        # Backfill email + google picture on first sign-in (don't overwrite a
+        # custom avatar the user may have chosen).
+        if email and not p.get('email'):
+            p['email'] = email
+        if picture and not p.get('avatar_image'):
+            p['avatar_image'] = picture
+        p['auth_provider'] = 'google'
+        mark_profiles_dirty()
+        return jsonify({
+            'ok': True,
+            'user_id': user_id,
+            'name': p.get('name', name)[:20],
+            'email': email,
+            'picture': p.get('avatar_image', ''),
+        })
+    except ValueError as e:
+        # Token failed verification (expired, wrong audience, forged, etc.)
+        print(f"[auth_google] token verification failed: {e}")
+        return jsonify({'ok': False, 'error': 'token verification failed'}), 401
+    except Exception as e:
+        print(f"[auth_google] error: {e}")
+        return jsonify({'ok': False, 'error': 'auth error'}), 500
 
 
 

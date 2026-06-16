@@ -208,6 +208,7 @@ const State = {
     mySid: null,
     myName: '',
     myUserId: null,               // stable browser UUID — survives SID changes & reconnects
+    googleClientId: null,         // set from /api/public/config; enables Google sign-in
     roomCode: '',                 // current room code
     isSpectator: false,           // joined mid-game as spectator
     selectedGame: 'guessduel',    // 'guessduel' | 'wordchain' | 'oneshot' | 'footymind' | 'trivia'
@@ -403,7 +404,7 @@ function debugLogInit() {
 // Build version this JS file expects. Must match server's /version response.
 // Auto-reload if they diverge (catches stale browser caches even when the
 // no-cache headers are bypassed by a proxy / service worker).
-const GAMEROOM_BUILD = 'v34';
+const GAMEROOM_BUILD = 'v37';
 async function checkBuildVersion() {
     try {
         const res = await fetch('/version', {cache: 'no-store'});
@@ -602,7 +603,9 @@ function showLeaveModal() {
     const LIVE_PHASES = ['playing', 'secrets', 'pick_target', 'setup', 'cointoss',
                          'wc_playing', 'wc_round_intro', 'wc_round_end',
                          'ts_round', 'ts_round_end',
-                         'geo_round', 'geo_round_end'];
+                         'geo_round', 'geo_round_end',
+                         'trivia_round', 'trivia_round_end',
+                         'footy_round', 'footy_round_end'];
     const inServerLive = s && LIVE_PHASES.includes(s.phase);
     // Also count purely-client solo screens (geo, trivia, footy, oneshot HTTP flows)
     const inClientLive = isOnLivePlayScreen();
@@ -975,6 +978,10 @@ function routePhase(s) {
     else if (phase === 'ts_round_end') renderTsRoundEnd(s);
     else if (phase === 'geo_round') renderGeoMpRound(s);
     else if (phase === 'geo_round_end') renderGeoMpRoundEnd(s);
+    else if (phase === 'trivia_round') renderTriviaMpRound(s);
+    else if (phase === 'trivia_round_end') renderTriviaMpRoundEnd(s);
+    else if (phase === 'footy_round') renderFootyMpRound(s);
+    else if (phase === 'footy_round_end') renderFootyMpRoundEnd(s);
     else if (phase === 'halfit_round') renderHalfItRound(s);
     else if (phase === 'halfit_round_end') renderHalfItRoundEnd(s);
     else if (phase === 'angle_round') renderAngleRound(s);
@@ -983,6 +990,8 @@ function routePhase(s) {
     else if (phase === 'pict_round_end') renderPictRoundEnd(s);
     else if (phase === 'game_over' && s.game_type === 'timeshot') renderTsGameOver(s);
     else if (phase === 'game_over' && s.game_type === 'geography') renderGeoMpGameOver(s);
+    else if (phase === 'game_over' && s.game_type === 'trivia') renderTriviaMpGameOver(s);
+    else if (phase === 'game_over' && s.game_type === 'footymind') renderFootyMpGameOver(s);
     else if (phase === 'game_over' && s.game_type === 'halfit') renderHalfItGameOver(s);
     else if (phase === 'game_over' && s.game_type === 'angle') renderAngleGameOver(s);
     else if (phase === 'game_over' && s.game_type === 'pictionary') renderPictGameOver(s);
@@ -2629,6 +2638,10 @@ function wireInviteModal() {
 }
 
 function wireHome() {
+    // Sign out of Google (reverts to guest)
+    const signOutBtn = document.getElementById('sign-out-btn');
+    if (signOutBtn) signOutBtn.onclick = () => { signOutGoogle(); };
+
     // Game cards go straight to mode picker. By this point the player MUST
     // have entered their name (the landing → guest-name flow guarantees it).
     document.querySelectorAll('.game-card[data-game]').forEach(card => {
@@ -2706,16 +2719,16 @@ const GAME_MODE_CONFIG = {
         title: 'Guess the footballer',
         blurb: "From their career path. Type 'messi', 'leo', 'cr7' — we accept all.",
         solo: { available: true, desc: '10 players, beat your score' },
-        faceoff: { available: false, desc: 'Coming next' },
-        group: { available: false, desc: 'Coming next' }
+        faceoff: { available: true, desc: '1v1, fastest correct wins' },
+        group: { available: true, desc: '3-8 players, race to answer' }
     },
     trivia: {
         label: 'TriviaRush',
         title: '10 mixed questions',
         blurb: 'Multiple choice, "which is older", true/false. No filler.',
         solo: { available: true, desc: 'Beat your high score' },
-        faceoff: { available: false, desc: 'Coming next' },
-        group: { available: false, desc: 'Coming next' }
+        faceoff: { available: true, desc: '1v1, fastest correct wins' },
+        group: { available: true, desc: '3-8 players, race to answer' }
     },
     geo: {
         label: 'Geography',
@@ -2921,6 +2934,11 @@ function handleModePicked(game, mode) {
     // button then routes to the action chooser (it reads State.pickedMode).
     if (game === 'angle') { angleShowIntro(); return; }
     if (game === 'pictionary') { pictShowIntro(); return; }
+    // TriviaRush faceoff/group: host picks categories + question count on the
+    // intro screen first; its Start button then routes to the action chooser.
+    if (game === 'trivia') { triviaShowIntro(); return; }
+    // FootyMind faceoff/group: host picks difficulty + question count on intro.
+    if (game === 'footymind') { footymindShowIntro(); return; }
     const cfg = GAME_MODE_CONFIG[game];
     if (mode === 'faceoff') {
         $('action-title').textContent = `${cfg.label} Face-off`;
@@ -3125,6 +3143,24 @@ function wireLobby() {
                 geo_mode: GeoMP.selectedMode,
                 total_rounds: GeoMP.selectedRounds,
                 geo_difficulty: 'mixed'
+            });
+            return;
+        }
+        if (gameType === 'trivia') {
+            socket.emit('start_game', {
+                game_type: 'trivia',
+                mode: State.pickedMode || 'group',
+                categories: TriviaMP.selectedCats || [],
+                total_rounds: TriviaMP.selectedRounds || 10
+            });
+            return;
+        }
+        if (gameType === 'footymind') {
+            socket.emit('start_game', {
+                game_type: 'footymind',
+                mode: State.pickedMode || 'group',
+                fm_difficulty: FootyMP.selectedDifficulty || 'easy',
+                total_rounds: FootyMP.selectedRounds || 10
             });
             return;
         }
@@ -3786,8 +3822,10 @@ const FootyMind = {
 
 function footymindShowIntro() {
     showScreen('screen-footymind-intro');
+    const mode = State.pickedMode || 'solo';
+    const btnMode = (mode === 'faceoff') ? 'faceoff' : (mode === 'group' ? 'group' : 'solo');
     document.querySelectorAll('#screen-footymind-intro .mode-card').forEach(c => {
-        c.classList.toggle('active', c.dataset.fmmode === 'solo');
+        c.classList.toggle('active', c.dataset.fmmode === btnMode);
     });
     document.querySelectorAll('#screen-footymind-intro .seg-btn[data-fmdiff]').forEach(b => {
         b.classList.toggle('active', b.dataset.fmdiff === 'easy');
@@ -3806,6 +3844,31 @@ function updateFootyMindDifficultyDesc() {
 }
 
 async function footymindStart() {
+    // Which mode is selected?
+    const activeCard = document.querySelector('#screen-footymind-intro .mode-card.active');
+    const activeMode = activeCard ? activeCard.dataset.fmmode : 'solo';
+    const roundsBtn = document.querySelector('#footymind-rounds-row .seg-btn.active');
+    const rounds = roundsBtn ? (parseInt(roundsBtn.dataset.fmrounds, 10) || 10) : 10;
+
+    // FACE-OFF / GROUP -> room flow
+    if (activeMode === 'faceoff' || activeMode === 'group') {
+        FootyMP.selectedDifficulty = FootyMind.difficulty || 'easy';
+        FootyMP.selectedRounds = (rounds === 20) ? 20 : 10;
+        State.pickedMode = activeMode;
+        State.selectedGame = 'footymind';
+        const cfg = GAME_MODE_CONFIG['footymind'];
+        if (activeMode === 'faceoff') {
+            $('action-title').textContent = `${cfg.label} Face-off`;
+            $('action-blurb').textContent = 'Create a match and send the link to your opponent, or join one they shared with you.';
+        } else {
+            $('action-title').textContent = `${cfg.label} Friend group`;
+            $('action-blurb').textContent = 'Create a room and share the link with your group, or join an existing room.';
+        }
+        showScreen('screen-action');
+        return;
+    }
+
+    // SOLO -> existing HTTP flow
     try {
         const res = await fetch(`/api/footymind/round?difficulty=${FootyMind.difficulty}&n=10`);
         const data = await res.json();
@@ -3995,17 +4058,8 @@ function wireFootyMind() {
     document.querySelectorAll('#screen-footymind-intro .mode-card[data-fmmode]').forEach(c => {
         c.onclick = () => {
             soundClick();
-            const mode = c.dataset.fmmode;
             document.querySelectorAll('#screen-footymind-intro .mode-card').forEach(x =>
                 x.classList.toggle('active', x === c));
-            if (mode !== 'solo') {
-                toast(mode === 'duel' ? '1v1 mode coming next — solo works now' : 'Group mode coming next');
-                // Revert to solo
-                setTimeout(() => {
-                    document.querySelectorAll('#screen-footymind-intro .mode-card').forEach(x =>
-                        x.classList.toggle('active', x.dataset.fmmode === 'solo'));
-                }, 1500);
-            }
         };
     });
     document.querySelectorAll('#screen-footymind-intro .seg-btn[data-fmdiff]').forEach(b => {
@@ -4015,6 +4069,13 @@ function wireFootyMind() {
             document.querySelectorAll('#screen-footymind-intro .seg-btn[data-fmdiff]').forEach(x =>
                 x.classList.toggle('active', x === b));
             updateFootyMindDifficultyDesc();
+        };
+    });
+    document.querySelectorAll('#footymind-rounds-row .seg-btn[data-fmrounds]').forEach(b => {
+        b.onclick = () => {
+            soundClick();
+            document.querySelectorAll('#footymind-rounds-row .seg-btn').forEach(x =>
+                x.classList.toggle('active', x === b));
         };
     });
     $('btn-footymind-start').onclick = () => { soundClick(); footymindStart(); };
@@ -4060,8 +4121,11 @@ function triviaSaveSeen(seen) {
 function triviaShowIntro() {
     Trivia.seenIds = triviaLoadSeen();
     showScreen('screen-trivia-intro');
+    // Reflect the mode chosen on the mode-pick screen (solo by default)
+    const mode = State.pickedMode || 'solo';
+    const btnMode = (mode === 'faceoff') ? 'faceoff' : (mode === 'group' ? 'group' : 'solo');
     document.querySelectorAll('#screen-trivia-intro .mode-card').forEach(c => {
-        c.classList.toggle('active', c.dataset.trmode === 'solo');
+        c.classList.toggle('active', c.dataset.trmode === btnMode);
     });
     // All cats active by default
     document.querySelectorAll('#trivia-cats .cat-chip').forEach(c => {
@@ -4086,6 +4150,33 @@ async function triviaStart() {
         toast('Pick at least one category');
         return;
     }
+    // Which mode is selected on the intro?
+    const activeMode = (document.querySelector('#screen-trivia-intro .mode-card.active') || {}).dataset
+        ? document.querySelector('#screen-trivia-intro .mode-card.active').dataset.trmode
+        : 'solo';
+    // Question count (10 or 20)
+    const roundsBtn = document.querySelector('#trivia-rounds-row .seg-btn.active');
+    const rounds = roundsBtn ? (parseInt(roundsBtn.dataset.trrounds, 10) || 10) : 10;
+
+    // FACE-OFF / GROUP -> go through the room flow
+    if (activeMode === 'faceoff' || activeMode === 'group') {
+        TriviaMP.selectedCats = Trivia.selectedCats.slice();
+        TriviaMP.selectedRounds = (rounds === 20) ? 20 : 10;
+        State.pickedMode = activeMode;
+        State.selectedGame = 'trivia';
+        const cfg = GAME_MODE_CONFIG['trivia'];
+        if (activeMode === 'faceoff') {
+            $('action-title').textContent = `${cfg.label} Face-off`;
+            $('action-blurb').textContent = 'Create a match and send the link to your opponent, or join one they shared with you.';
+        } else {
+            $('action-title').textContent = `${cfg.label} Friend group`;
+            $('action-blurb').textContent = 'Create a room and share the link with your group, or join an existing room.';
+        }
+        showScreen('screen-action');
+        return;
+    }
+
+    // SOLO -> existing HTTP flow
     const catsParam = Trivia.selectedCats.join(',');
     const excludeParam = Trivia.seenIds.length > 0
         ? '&exclude=' + encodeURIComponent(Trivia.seenIds.join('|'))
@@ -4310,20 +4401,20 @@ async function triviaDone() {
 }
 
 function wireTrivia() {
-    // Mode buttons (only solo works for now)
+    // Mode buttons — solo / 1v1 / group all selectable now
     document.querySelectorAll('#screen-trivia-intro .mode-card[data-trmode]').forEach(c => {
         c.onclick = () => {
             soundClick();
-            const mode = c.dataset.trmode;
             document.querySelectorAll('#screen-trivia-intro .mode-card').forEach(x =>
                 x.classList.toggle('active', x === c));
-            if (mode !== 'solo') {
-                toast(mode === 'duel' ? '1v1 mode coming next session' : 'Group mode coming next session');
-                setTimeout(() => {
-                    document.querySelectorAll('#screen-trivia-intro .mode-card').forEach(x =>
-                        x.classList.toggle('active', x.dataset.trmode === 'solo'));
-                }, 1500);
-            }
+        };
+    });
+    // Question-count buttons (10 / 20)
+    document.querySelectorAll('#trivia-rounds-row .seg-btn[data-trrounds]').forEach(b => {
+        b.onclick = () => {
+            soundClick();
+            document.querySelectorAll('#trivia-rounds-row .seg-btn').forEach(x =>
+                x.classList.toggle('active', x === b));
         };
     });
     // Cat chips
@@ -5435,6 +5526,419 @@ function geoMpSubmitAnswer(answer) {
     if (waiting) waiting.style.display = '';
 }
 
+// =========================================================================
+// TRIVIARUSH MULTIPLAYER (faceoff / group) — client
+// =========================================================================
+const TriviaMP = {
+    selectedCats: [],
+    selectedRounds: 10,
+    _timerInterval: null,
+    _submitted: false,
+};
+const TRIVIA_CAT_LABELS = {
+    football: '⚽ Football', geography: '🌍 Geography', science: '🔬 Science',
+    movies: '🎬 Movies', music: '🎵 Music', history: '📜 History', pop: '📱 Pop Culture'
+};
+
+function triviaMpResetForRound() {
+    TriviaMP._submitted = false;
+    if (TriviaMP._timerInterval) {
+        clearInterval(TriviaMP._timerInterval);
+        TriviaMP._timerInterval = null;
+    }
+}
+
+function renderTriviaMpScoreboard(s) {
+    const tv = s.trivia || {};
+    const scores = tv.scores || {};
+    const el = document.getElementById('trivia-mp-scoreboard');
+    if (!el) return;
+    const rows = (s.players || []).filter(p => !p.is_bot)
+        .map(p => ({ p, sc: scores[p.sid] || 0 }))
+        .sort((a, b) => b.sc - a.sc)
+        .map(({ p, sc }) => {
+            const isMe = p.sid === State.mySid;
+            return `<div class="geo-mp-score-row${isMe ? ' self' : ''}">
+                <span class="geo-mp-score-name">${escapeHtml(p.name)}${isMe ? ' (you)' : ''}</span>
+                <span class="geo-mp-score-val">${sc}</span>
+            </div>`;
+        });
+    el.innerHTML = rows.join('');
+}
+
+function renderTriviaMpRound(s) {
+    showScreen('screen-trivia-mp-round');
+    updateHeader(s);
+    const tv = s.trivia || {};
+    const q = tv.question || {};
+    document.getElementById('trivia-mp-round-num').textContent = tv.round_number || 1;
+    document.getElementById('trivia-mp-round-total').textContent = tv.total_rounds || 10;
+    renderTriviaMpScoreboard(s);
+
+    // New round? reset UI + timer
+    if (State._triviaMpCurRound !== tv.round_number) {
+        State._triviaMpCurRound = tv.round_number;
+        triviaMpResetForRound();
+        if (tv.round_deadline) {
+            const updateTimer = () => {
+                const remain = Math.max(0, Math.ceil(tv.round_deadline - (Date.now() / 1000)));
+                const el = document.getElementById('trivia-mp-timer');
+                if (el) {
+                    el.textContent = remain + 's';
+                    el.style.color = remain <= 5 ? '#b04040' : '';
+                }
+                if (remain <= 0 && TriviaMP._timerInterval) {
+                    clearInterval(TriviaMP._timerInterval);
+                    TriviaMP._timerInterval = null;
+                }
+            };
+            updateTimer();
+            if (TriviaMP._timerInterval) clearInterval(TriviaMP._timerInterval);
+            TriviaMP._timerInterval = setInterval(updateTimer, 500);
+        }
+    }
+
+    // Did I already answer this round?
+    if ((tv.round_answers || {})[State.mySid]) TriviaMP._submitted = true;
+
+    document.getElementById('trivia-mp-cat-label').textContent =
+        TRIVIA_CAT_LABELS[q.cat] || (q.cat || '');
+    document.getElementById('trivia-mp-question').textContent = q.q || '';
+
+    const optsWrap = document.getElementById('trivia-mp-options');
+    optsWrap.innerHTML = '';
+    (q.options || []).forEach((opt, idx) => {
+        const btn = document.createElement('button');
+        btn.className = 'trivia-opt';
+        btn.textContent = opt;
+        btn.disabled = TriviaMP._submitted;
+        btn.onclick = () => {
+            if (TriviaMP._submitted) return;
+            soundClick();
+            triviaMpSubmitAnswer(idx);
+            Array.from(optsWrap.children).forEach(b => b.disabled = true);
+            btn.classList.add('picked');
+        };
+        optsWrap.appendChild(btn);
+    });
+    document.getElementById('trivia-mp-waiting').style.display =
+        TriviaMP._submitted ? '' : 'none';
+}
+
+function triviaMpSubmitAnswer(choiceIdx) {
+    if (TriviaMP._submitted) return;
+    TriviaMP._submitted = true;
+    socket.emit('trivia_submit_answer', { choice: choiceIdx });
+    const waiting = document.getElementById('trivia-mp-waiting');
+    if (waiting) waiting.style.display = '';
+}
+
+function renderTriviaMpRoundEnd(s) {
+    showScreen('screen-trivia-mp-round-end');
+    updateHeader(s);
+    const tv = s.trivia || {};
+    const q = tv.question || {};
+    document.getElementById('trivia-mp-re-round').textContent = tv.round_number || 1;
+    // Reveal correct answer text
+    let correctText = '—';
+    if (q.options && typeof q.answer_index === 'number' && q.options[q.answer_index] != null) {
+        correctText = q.options[q.answer_index];
+    }
+    document.getElementById('trivia-mp-re-answer').textContent = correctText;
+    const explainEl = document.getElementById('trivia-mp-re-explain');
+    if (q.explain) { explainEl.textContent = q.explain; explainEl.classList.remove('hidden'); }
+    else { explainEl.textContent = ''; explainEl.classList.add('hidden'); }
+
+    const listEl = document.getElementById('trivia-mp-results-list');
+    listEl.innerHTML = '';
+    const answers = tv.round_answers || {};
+    (s.players || []).filter(p => !p.is_bot).forEach(p => {
+        const ans = answers[p.sid];
+        const row = document.createElement('div');
+        row.className = 'geo-mp-result-row' + (p.sid === State.mySid ? ' self' : '');
+        const who = `<span class="result-name">${escapeHtml(p.name)}${p.sid === State.mySid ? ' (you)' : ''}</span>`;
+        if (ans) {
+            const chosen = (q.options && q.options[ans.choice] != null) ? q.options[ans.choice] : '—';
+            const verdict = ans.correct
+                ? `<span class="result-correct">✓ +${ans.score_delta}</span>`
+                : `<span class="result-wrong">✗</span>`;
+            row.innerHTML = `${who}
+                <span class="result-answer">${escapeHtml(chosen)}</span>
+                ${verdict}
+                <span class="result-time">${ans.time}s</span>`;
+        } else {
+            row.innerHTML = `${who}
+                <span class="result-answer muted">no answer</span>
+                <span class="result-wrong">✗</span>
+                <span class="result-time">—</span>`;
+        }
+        listEl.appendChild(row);
+    });
+}
+
+function renderTriviaMpGameOver(s) {
+    showScreen('screen-trivia-mp-game-over');
+    const tv = s.trivia || {};
+    const ranking = tv.final_ranking || [];
+    const winners = tv.winners || [];
+    triviaMpResetForRound();
+
+    const stamp = document.getElementById('trivia-mp-go-stamp');
+    const winnerEl = document.getElementById('trivia-mp-go-winner');
+    const iWon = winners.includes(State.mySid);
+    if (iWon) {
+        stamp.textContent = 'YOU WIN!';
+        winnerEl.textContent = '🏆 +150 XP / +30 coins';
+    } else if (winners.length > 1) {
+        stamp.textContent = 'TIE';
+        const names = winners.map(w => { const r = ranking.find(x => x.sid === w); return r ? r.name : '?'; });
+        winnerEl.textContent = names.join(' & ') + ' tied!';
+    } else if (winners.length === 1) {
+        const r = ranking.find(x => x.sid === winners[0]);
+        stamp.textContent = 'GAME OVER';
+        winnerEl.textContent = (r ? r.name : 'Someone') + ' wins!';
+    } else {
+        stamp.textContent = 'GAME OVER';
+        winnerEl.textContent = 'No winner';
+    }
+
+    const list = document.getElementById('trivia-mp-final-ranking');
+    list.innerHTML = '';
+    ranking.forEach((r, i) => {
+        const row = document.createElement('div');
+        row.className = 'geo-mp-rank-row' + (r.sid === State.mySid ? ' self' : '');
+        row.innerHTML = `<span class="rank-pos">#${i + 1}</span>
+            <span class="rank-name">${escapeHtml(r.name)}${r.sid === State.mySid ? ' (you)' : ''}</span>
+            <span class="rank-score">${r.score}</span>`;
+        list.appendChild(row);
+    });
+
+    const rematch = document.getElementById('trivia-mp-rematch');
+    if (rematch) rematch.onclick = () => { soundClick(); socket.emit('rematch'); };
+    const home = document.getElementById('trivia-mp-home');
+    if (home) home.onclick = () => {
+        soundClick();
+        leaveCurrentRoomIfAny();
+        refreshProfileUI();
+        showScreen('screen-home');
+    };
+    setTimeout(() => { refreshProfileUI(); }, 400);
+}
+
+// =========================================================================
+// FOOTYMIND MULTIPLAYER (faceoff / group) — client
+//   Career path is the clue; the answer is a typed player name.
+// =========================================================================
+const FootyMP = {
+    selectedDifficulty: 'easy',
+    selectedRounds: 10,
+    _timerInterval: null,
+    _submitted: false,
+};
+
+function footyMpResetForRound() {
+    FootyMP._submitted = false;
+    if (FootyMP._timerInterval) {
+        clearInterval(FootyMP._timerInterval);
+        FootyMP._timerInterval = null;
+    }
+}
+
+function renderFootyMpScoreboard(s) {
+    const fm = s.footy || {};
+    const scores = fm.scores || {};
+    const el = document.getElementById('footy-mp-scoreboard');
+    if (!el) return;
+    const rows = (s.players || []).filter(p => !p.is_bot)
+        .map(p => ({ p, sc: scores[p.sid] || 0 }))
+        .sort((a, b) => b.sc - a.sc)
+        .map(({ p, sc }) => {
+            const isMe = p.sid === State.mySid;
+            return `<div class="geo-mp-score-row${isMe ? ' self' : ''}">
+                <span class="geo-mp-score-name">${escapeHtml(p.name)}${isMe ? ' (you)' : ''}</span>
+                <span class="geo-mp-score-val">${sc}</span>
+            </div>`;
+        });
+    el.innerHTML = rows.join('');
+}
+
+function renderFootyMpRound(s) {
+    showScreen('screen-footy-mp-round');
+    updateHeader(s);
+    const fm = s.footy || {};
+    const clue = fm.clue || {};
+    document.getElementById('footy-mp-round-num').textContent = fm.round_number || 1;
+    document.getElementById('footy-mp-round-total').textContent = fm.total_rounds || 10;
+    renderFootyMpScoreboard(s);
+
+    if (State._footyMpCurRound !== fm.round_number) {
+        State._footyMpCurRound = fm.round_number;
+        footyMpResetForRound();
+        if (fm.round_deadline) {
+            const updateTimer = () => {
+                const remain = Math.max(0, Math.ceil(fm.round_deadline - (Date.now() / 1000)));
+                const el = document.getElementById('footy-mp-timer');
+                if (el) {
+                    el.textContent = remain + 's';
+                    el.style.color = remain <= 5 ? '#b04040' : '';
+                }
+                if (remain <= 0 && FootyMP._timerInterval) {
+                    clearInterval(FootyMP._timerInterval);
+                    FootyMP._timerInterval = null;
+                }
+            };
+            updateTimer();
+            if (FootyMP._timerInterval) clearInterval(FootyMP._timerInterval);
+            FootyMP._timerInterval = setInterval(updateTimer, 500);
+        }
+    }
+
+    if ((fm.round_answers || {})[State.mySid]) FootyMP._submitted = true;
+
+    // Meta pills (nationality + position are shown as helper hints)
+    const natEl = document.getElementById('footy-mp-nationality');
+    const posEl = document.getElementById('footy-mp-position');
+    if (clue.nationality) { natEl.textContent = clue.nationality; natEl.classList.remove('empty'); }
+    else { natEl.textContent = ''; natEl.classList.add('empty'); }
+    if (clue.position) { posEl.textContent = clue.position; posEl.classList.remove('empty'); }
+    else { posEl.textContent = ''; posEl.classList.add('empty'); }
+
+    // Career path
+    const pathEl = document.getElementById('footy-mp-path');
+    pathEl.innerHTML = '';
+    (clue.path || []).forEach(step => {
+        const node = document.createElement('div');
+        node.className = 'fm-path-step';
+        node.innerHTML = `<div class="fm-step-years">${escapeHtml(step.years || '')}</div>
+                          <div class="fm-step-club">${escapeHtml(step.club || '')}</div>`;
+        pathEl.appendChild(node);
+    });
+
+    const inp = document.getElementById('footy-mp-input');
+    const sub = document.getElementById('footy-mp-submit');
+    if (!FootyMP._submitted) {
+        inp.disabled = false; sub.disabled = false;
+        setTimeout(() => { try { inp.focus(); } catch (e) {} }, 60);
+    } else {
+        inp.disabled = true; sub.disabled = true;
+    }
+    document.getElementById('footy-mp-waiting').style.display =
+        FootyMP._submitted ? '' : 'none';
+}
+
+function footyMpSubmitAnswer(answer) {
+    if (FootyMP._submitted) return;
+    const v = (answer || '').trim();
+    if (!v) return;
+    FootyMP._submitted = true;
+    socket.emit('footy_submit_answer', { answer: v });
+    const inp = document.getElementById('footy-mp-input');
+    const sub = document.getElementById('footy-mp-submit');
+    if (inp) inp.disabled = true;
+    if (sub) sub.disabled = true;
+    const waiting = document.getElementById('footy-mp-waiting');
+    if (waiting) waiting.style.display = '';
+}
+
+function renderFootyMpRoundEnd(s) {
+    showScreen('screen-footy-mp-round-end');
+    updateHeader(s);
+    const fm = s.footy || {};
+    const clue = fm.clue || {};
+    document.getElementById('footy-mp-re-round').textContent = fm.round_number || 1;
+    document.getElementById('footy-mp-re-answer').textContent = clue.name || '—';
+
+    const listEl = document.getElementById('footy-mp-results-list');
+    listEl.innerHTML = '';
+    const answers = fm.round_answers || {};
+    (s.players || []).filter(p => !p.is_bot).forEach(p => {
+        const ans = answers[p.sid];
+        const row = document.createElement('div');
+        row.className = 'geo-mp-result-row' + (p.sid === State.mySid ? ' self' : '');
+        const who = `<span class="result-name">${escapeHtml(p.name)}${p.sid === State.mySid ? ' (you)' : ''}</span>`;
+        if (ans) {
+            const verdict = ans.correct
+                ? `<span class="result-correct">✓ +${ans.score_delta}</span>`
+                : `<span class="result-wrong">✗</span>`;
+            row.innerHTML = `${who}
+                <span class="result-answer">${escapeHtml(ans.answer || '—')}</span>
+                ${verdict}
+                <span class="result-time">${ans.time}s</span>`;
+        } else {
+            row.innerHTML = `${who}
+                <span class="result-answer muted">no answer</span>
+                <span class="result-wrong">✗</span>
+                <span class="result-time">—</span>`;
+        }
+        listEl.appendChild(row);
+    });
+}
+
+function renderFootyMpGameOver(s) {
+    showScreen('screen-footy-mp-game-over');
+    const fm = s.footy || {};
+    const ranking = fm.final_ranking || [];
+    const winners = fm.winners || [];
+    footyMpResetForRound();
+
+    const stamp = document.getElementById('footy-mp-go-stamp');
+    const winnerEl = document.getElementById('footy-mp-go-winner');
+    const iWon = winners.includes(State.mySid);
+    if (iWon) {
+        stamp.textContent = 'YOU WIN!';
+        winnerEl.textContent = '🏆 +150 XP / +30 coins';
+    } else if (winners.length > 1) {
+        stamp.textContent = 'TIE';
+        const names = winners.map(w => { const r = ranking.find(x => x.sid === w); return r ? r.name : '?'; });
+        winnerEl.textContent = names.join(' & ') + ' tied!';
+    } else if (winners.length === 1) {
+        const r = ranking.find(x => x.sid === winners[0]);
+        stamp.textContent = 'GAME OVER';
+        winnerEl.textContent = (r ? r.name : 'Someone') + ' wins!';
+    } else {
+        stamp.textContent = 'GAME OVER';
+        winnerEl.textContent = 'No winner';
+    }
+
+    const list = document.getElementById('footy-mp-final-ranking');
+    list.innerHTML = '';
+    ranking.forEach((r, i) => {
+        const row = document.createElement('div');
+        row.className = 'geo-mp-rank-row' + (r.sid === State.mySid ? ' self' : '');
+        row.innerHTML = `<span class="rank-pos">#${i + 1}</span>
+            <span class="rank-name">${escapeHtml(r.name)}${r.sid === State.mySid ? ' (you)' : ''}</span>
+            <span class="rank-score">${r.score}</span>`;
+        list.appendChild(row);
+    });
+
+    const rematch = document.getElementById('footy-mp-rematch');
+    if (rematch) rematch.onclick = () => { soundClick(); socket.emit('rematch'); };
+    const home = document.getElementById('footy-mp-home');
+    if (home) home.onclick = () => {
+        soundClick();
+        leaveCurrentRoomIfAny();
+        refreshProfileUI();
+        showScreen('screen-home');
+    };
+    setTimeout(() => { refreshProfileUI(); }, 400);
+}
+
+function wireFootyMp() {
+    const inp = document.getElementById('footy-mp-input');
+    const sub = document.getElementById('footy-mp-submit');
+    if (sub) sub.onclick = () => {
+        if (FootyMP._submitted) return;
+        soundClick();
+        footyMpSubmitAnswer(inp ? inp.value : '');
+    };
+    if (inp) inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !FootyMP._submitted) {
+            e.preventDefault();
+            footyMpSubmitAnswer(inp.value);
+        }
+    });
+}
+
 function wireGeoMp() {
     const inp = document.getElementById('geo-mp-text-input');
     const sub = document.getElementById('geo-mp-text-submit');
@@ -5716,9 +6220,122 @@ async function applyPublicConfig() {
             const g = card.getAttribute('data-game');
             card.style.display = disabled.includes(g) ? 'none' : '';
         });
+        // Google sign-in: set up the button now that we have the client id
+        if (cfg.google_client_id) {
+            State.googleClientId = cfg.google_client_id;
+            setupGoogleSignIn();
+        }
     } catch (e) {
         // fail-open: do nothing
     }
+}
+
+// ---- Google Sign-In ----
+// A signed-in user's identity is keyed by their Google account, so progress
+// follows them across devices. Guests keep their random local id. Sign-in is
+// optional and purely additive.
+function googleAuthState() {
+    // Returns the saved Google session, or null for guests.
+    try {
+        const raw = localStorage.getItem('gameroom_google');
+        return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+}
+
+function renderAuthRow() {
+    const g = googleAuthState();
+    const signinWrap = document.getElementById('google-signin-wrap');
+    const signedWrap = document.getElementById('signed-in-wrap');
+    if (!signinWrap || !signedWrap) return;
+    if (g && g.user_id) {
+        signinWrap.classList.add('hidden');
+        signedWrap.classList.remove('hidden');
+        const em = document.getElementById('signed-in-email');
+        if (em) em.textContent = g.email || g.name || 'Google account';
+    } else {
+        signedWrap.classList.add('hidden');
+        signinWrap.classList.remove('hidden');
+    }
+}
+
+let _googleSetupDone = false;
+function setupGoogleSignIn() {
+    renderAuthRow();
+    // If already signed in, don't render the button.
+    if (googleAuthState()) return;
+    // The GSI library loads async; wait for it.
+    if (!window.google || !window.google.accounts || !window.google.accounts.id) {
+        setTimeout(setupGoogleSignIn, 400);
+        return;
+    }
+    if (_googleSetupDone) return;
+    _googleSetupDone = true;
+    try {
+        window.google.accounts.id.initialize({
+            client_id: State.googleClientId,
+            callback: onGoogleCredential,
+        });
+        const btn = document.getElementById('google-signin-btn');
+        if (btn) {
+            window.google.accounts.id.renderButton(btn, {
+                theme: 'outline', size: 'large', text: 'signin_with',
+                shape: 'pill', logo_alignment: 'left',
+            });
+        }
+    } catch (e) {
+        debugLog && debugLog('google init failed: ' + e);
+    }
+}
+
+async function onGoogleCredential(resp) {
+    // resp.credential is the Google ID token; verify it on our server.
+    try {
+        const r = await fetch('/api/auth/google', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ credential: resp.credential }),
+        });
+        const data = await r.json();
+        if (!r.ok || !data.ok) {
+            alert('Google sign-in failed. Please try again.');
+            return;
+        }
+        // Adopt the Google identity: switch our user_id + name to the
+        // server-verified values, persist them, and reconnect as that user.
+        localStorage.setItem('gameroom_google', JSON.stringify({
+            user_id: data.user_id, name: data.name, email: data.email, picture: data.picture,
+        }));
+        State.myUserId = data.user_id;
+        if (data.name) {
+            State.myName = data.name;
+            try { localStorage.setItem('gameroom_name', data.name); } catch (e) {}
+            try { localStorage.setItem('gameroom_uid', data.user_id); } catch (e) {}
+        }
+        // Re-identify to the server under the new id, then refresh the profile.
+        socket.emit('hello', { user_id: State.myUserId, name: State.myName || '' });
+        renderAuthRow();
+        if (typeof refreshProfileUI === 'function') { refreshProfileUI(); }
+        // Hide the sign-in button
+        const signinWrap = document.getElementById('google-signin-wrap');
+        if (signinWrap) signinWrap.classList.add('hidden');
+    } catch (e) {
+        alert('Google sign-in error. Please try again.');
+    }
+}
+
+function signOutGoogle() {
+    try { localStorage.removeItem('gameroom_google'); } catch (e) {}
+    // Revert to a fresh guest identity so the signed-out user starts clean.
+    const newUid = 'u_' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+    try { localStorage.setItem('gameroom_uid', newUid); } catch (e) {}
+    State.myUserId = newUid;
+    // Keep their typed name field but clear the Google-derived one is optional;
+    // we keep the name so guest play continues smoothly.
+    _googleSetupDone = false;
+    socket.emit('hello', { user_id: State.myUserId, name: State.myName || '' });
+    renderAuthRow();
+    setupGoogleSignIn();
+    if (typeof refreshProfileUI === 'function') { refreshProfileUI(); }
 }
 
 function boot() {
@@ -5754,6 +6371,7 @@ function boot() {
     wireTimeShot();
     wireEditProfile();
     wireGeoMp();
+    wireFootyMp();
     wireHalfIt();
     wireAngle();
     wirePictionary();
@@ -5779,13 +6397,23 @@ function boot() {
     // disconnects (which generate new SIDs) and is the basis for the
     // future direct-challenge feature.
     try {
-        let uid = localStorage.getItem('gameroom_uid');
-        if (!uid) {
-            uid = 'u_' + Math.random().toString(36).slice(2, 10)
-                       + Math.random().toString(36).slice(2, 10);
-            localStorage.setItem('gameroom_uid', uid);
+        // If the user signed in with Google, use that identity instead of a
+        // random guest id, so their progress follows them.
+        let googleSession = null;
+        try { googleSession = JSON.parse(localStorage.getItem('gameroom_google') || 'null'); } catch (e) {}
+        if (googleSession && googleSession.user_id) {
+            State.myUserId = googleSession.user_id;
+            if (googleSession.name && !State.myName) State.myName = googleSession.name;
+            try { localStorage.setItem('gameroom_uid', googleSession.user_id); } catch (e) {}
+        } else {
+            let uid = localStorage.getItem('gameroom_uid');
+            if (!uid) {
+                uid = 'u_' + Math.random().toString(36).slice(2, 10)
+                           + Math.random().toString(36).slice(2, 10);
+                localStorage.setItem('gameroom_uid', uid);
+            }
+            State.myUserId = uid;
         }
-        State.myUserId = uid;
     } catch (e) {
         State.myUserId = 'u_anon_' + Math.random().toString(36).slice(2, 10);
     }

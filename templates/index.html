@@ -6,7 +6,10 @@
     <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#ffffff">
     <title>GameRoom</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=34">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=37">
+    <!-- Google Identity Services (Sign in with Google). Loaded async; the
+         client wires it up once /api/public/config returns the client id. -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body data-theme="default">
 
@@ -91,6 +94,17 @@
                     <span class="profile-mini-stat"><b id="profile-wins">0</b> wins</span>
                     <span class="profile-mini-stat profile-mini-stat-loss"><b id="profile-losses">0</b> losses</span>
                     <span class="profile-mini-stat"><b id="profile-streak-count">0</b> 🔥 streak</span>
+                </div>
+                <!-- Google sign-in / signed-in status -->
+                <div class="profile-auth-row" id="profile-auth-row">
+                    <div id="google-signin-wrap" class="hidden">
+                        <div class="auth-hint">Sign in to save your progress across devices</div>
+                        <div id="google-signin-btn"></div>
+                    </div>
+                    <div id="signed-in-wrap" class="hidden">
+                        <span class="signed-in-text">Signed in as <b id="signed-in-email">—</b></span>
+                        <button id="sign-out-btn" class="btn-text-link">Sign out</button>
+                    </div>
                 </div>
             </div>
 
@@ -837,15 +851,15 @@
                         <div class="mode-title">Solo</div>
                         <div class="mode-desc">10 players, see how far you get</div>
                     </button>
-                    <button class="mode-card" data-fmmode="duel">
+                    <button class="mode-card" data-fmmode="faceoff">
                         <div class="mode-icon">&#9876;&#65039;</div>
                         <div class="mode-title">1v1</div>
-                        <div class="mode-desc">First correct wins (coming next)</div>
+                        <div class="mode-desc">Fastest correct wins</div>
                     </button>
                     <button class="mode-card" data-fmmode="group">
                         <div class="mode-icon">&#128101;</div>
                         <div class="mode-title">Friend group</div>
-                        <div class="mode-desc">3+ players (coming next)</div>
+                        <div class="mode-desc">Race to answer</div>
                     </button>
                 </div>
 
@@ -856,6 +870,14 @@
                     <button class="seg-btn" data-fmdiff="hard">Hard</button>
                 </div>
                 <p class="muted small" id="footymind-diff-desc">Easy: superstars only — Messi, Ronaldo, Neymar level.</p>
+
+                <div id="footymind-rounds-row">
+                    <label>Number of players to guess</label>
+                    <div class="segmented">
+                        <button class="seg-btn active" data-fmrounds="10">10 players</button>
+                        <button class="seg-btn" data-fmrounds="20">20 players</button>
+                    </div>
+                </div>
 
                 <button id="btn-footymind-start" class="btn btn-primary">Start</button>
             </div>
@@ -902,6 +924,55 @@
             </div>
         </section>
 
+        <!-- FOOTYMIND MULTIPLAYER -->
+        <section id="screen-footy-mp-round" class="screen">
+            <div class="turn-banner">
+                <div class="turn-banner-text">
+                    Player <span id="footy-mp-round-num">1</span> / <span id="footy-mp-round-total">10</span>
+                </div>
+                <div class="timer" id="footy-mp-timer">25s</div>
+            </div>
+            <div id="footy-mp-scoreboard" class="geo-mp-scoreboard"></div>
+            <div class="card footymind-card">
+                <div class="footymind-meta" id="footy-mp-meta">
+                    <span class="footymind-meta-pill" id="footy-mp-nationality"></span>
+                    <span class="footymind-meta-pill" id="footy-mp-position"></span>
+                </div>
+                <h2 class="footymind-prompt">Who is this player?</h2>
+                <div class="footymind-path" id="footy-mp-path"></div>
+                <input type="text" id="footy-mp-input" class="footymind-text-input"
+                       placeholder="Type the player's name (e.g. messi, leo, cr7)"
+                       autocomplete="off" autocapitalize="words" spellcheck="false">
+                <button id="footy-mp-submit" class="btn btn-primary">Guess</button>
+                <div id="footy-mp-waiting" class="muted center" style="display:none; margin-top:10px;">
+                    Answer locked in — waiting for others…
+                </div>
+            </div>
+        </section>
+
+        <section id="screen-footy-mp-round-end" class="screen">
+            <div class="turn-banner">
+                <div class="turn-banner-text">Player <span id="footy-mp-re-round">1</span> result</div>
+            </div>
+            <div class="card">
+                <div class="muted small center">The player was</div>
+                <div class="trivia-mp-correct center" id="footy-mp-re-answer">—</div>
+                <h2 style="margin-top:14px;">This round</h2>
+                <div id="footy-mp-results-list" class="geo-mp-results"></div>
+            </div>
+        </section>
+
+        <section id="screen-footy-mp-game-over" class="screen">
+            <div class="card">
+                <div class="big-stamp center" id="footy-mp-go-stamp">GAME OVER</div>
+                <div class="center" id="footy-mp-go-winner" style="font-weight:600; margin:8px 0 16px;"></div>
+                <h2>Final standings</h2>
+                <div id="footy-mp-final-ranking" class="geo-mp-final"></div>
+                <button id="footy-mp-rematch" class="btn btn-primary">Rematch</button>
+                <button id="footy-mp-home" class="btn btn-secondary">Home</button>
+            </div>
+        </section>
+
         <!-- TRIVIARUSH -->
         <section id="screen-trivia-intro" class="screen">
             <div class="card">
@@ -917,16 +988,24 @@
                         <div class="mode-title">Solo</div>
                         <div class="mode-desc">Beat your high score</div>
                     </button>
-                    <button class="mode-card" data-trmode="duel">
+                    <button class="mode-card" data-trmode="faceoff">
                         <div class="mode-icon">&#9876;&#65039;</div>
                         <div class="mode-title">1v1</div>
-                        <div class="mode-desc">Coming next</div>
+                        <div class="mode-desc">Fastest correct wins</div>
                     </button>
                     <button class="mode-card" data-trmode="group">
                         <div class="mode-icon">&#128101;</div>
                         <div class="mode-title">Friend group</div>
-                        <div class="mode-desc">Coming next</div>
+                        <div class="mode-desc">Race to answer</div>
                     </button>
+                </div>
+
+                <div id="trivia-rounds-row">
+                    <label>Number of questions</label>
+                    <div class="segmented">
+                        <button class="seg-btn active" data-trrounds="10">10 questions</button>
+                        <button class="seg-btn" data-trrounds="20">20 questions</button>
+                    </div>
                 </div>
 
                 <label>Categories (tap to toggle)</label>
@@ -970,6 +1049,49 @@
                 <div class="trivia-review" id="trivia-review"></div>
                 <button id="trivia-replay" class="btn btn-primary">Play again</button>
                 <button id="trivia-back-home" class="btn btn-secondary">Home</button>
+            </div>
+        </section>
+
+        <!-- TRIVIARUSH MULTIPLAYER -->
+        <section id="screen-trivia-mp-round" class="screen">
+            <div class="turn-banner">
+                <div class="turn-banner-text">
+                    Q <span id="trivia-mp-round-num">1</span> / <span id="trivia-mp-round-total">10</span>
+                </div>
+                <div class="timer" id="trivia-mp-timer">20s</div>
+            </div>
+            <div id="trivia-mp-scoreboard" class="geo-mp-scoreboard"></div>
+            <div class="card trivia-card">
+                <div class="trivia-cat-label" id="trivia-mp-cat-label"></div>
+                <h2 class="trivia-question" id="trivia-mp-question">...</h2>
+                <div class="trivia-options" id="trivia-mp-options"></div>
+                <div id="trivia-mp-waiting" class="muted center" style="display:none; margin-top:10px;">
+                    Answer locked in — waiting for others…
+                </div>
+            </div>
+        </section>
+
+        <section id="screen-trivia-mp-round-end" class="screen">
+            <div class="turn-banner">
+                <div class="turn-banner-text">Question <span id="trivia-mp-re-round">1</span> result</div>
+            </div>
+            <div class="card">
+                <div class="muted small center">Correct answer</div>
+                <div class="trivia-mp-correct center" id="trivia-mp-re-answer">—</div>
+                <div class="trivia-explain" id="trivia-mp-re-explain"></div>
+                <h2 style="margin-top:14px;">This round</h2>
+                <div id="trivia-mp-results-list" class="geo-mp-results"></div>
+            </div>
+        </section>
+
+        <section id="screen-trivia-mp-game-over" class="screen">
+            <div class="card">
+                <div class="big-stamp center" id="trivia-mp-go-stamp">GAME OVER</div>
+                <div class="center" id="trivia-mp-go-winner" style="font-weight:600; margin:8px 0 16px;"></div>
+                <h2>Final standings</h2>
+                <div id="trivia-mp-final-ranking" class="geo-mp-final"></div>
+                <button id="trivia-mp-rematch" class="btn btn-primary">Rematch</button>
+                <button id="trivia-mp-home" class="btn btn-secondary">Home</button>
             </div>
         </section>
 
@@ -1754,6 +1876,6 @@
         window.INITIAL_MATCH_CODE = "{{ match_code or '' }}";
     </script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="{{ url_for('static', filename='app.js') }}?v=34"></script>
+    <script src="{{ url_for('static', filename='app.js') }}?v=37"></script>
 </body>
 </html>

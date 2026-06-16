@@ -3646,10 +3646,12 @@ main {
 .pict-guess-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .pict-guess-row input {
     flex: 1;
-    padding: 12px 14px;
+    min-width: 0;
+    padding: 14px 16px;
+    min-height: 52px;
     border: 2px solid var(--card-border);
     border-radius: var(--radius-sm);
-    font-size: 16px;
+    font-size: 18px;
     color: #0f0f10;
     background: #ffffff;
 }
@@ -3658,6 +3660,10 @@ main {
     border-color: var(--accent);
 }
 .pict-guess-row .btn { flex-shrink: 0; }
+@media (max-width: 460px) {
+    .pict-guess-row { flex-direction: column; }
+    .pict-guess-row .btn { width: 100%; }
+}
 .pict-feedback {
     min-height: 22px;
     text-align: center;
@@ -3751,3 +3757,46 @@ main {
     line-height: 1.4;
 }
 .home-announcement.hidden { display: none; }
+
+/* Google sign-in / signed-in row on the profile card */
+.profile-auth-row {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--card-border, #eef0f3);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+.profile-auth-row.hidden { display: none; }
+.auth-hint {
+    font-size: 12px;
+    color: var(--muted, #4a5260);
+    text-align: center;
+}
+#google-signin-btn { display: flex; justify-content: center; }
+.signed-in-text {
+    font-size: 13px;
+    color: var(--muted, #4a5260);
+}
+.signed-in-text b { color: var(--text, #0f0f10); }
+.btn-text-link {
+    background: none;
+    border: none;
+    color: var(--primary, #1f5fff);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 4px 6px;
+    margin-left: 6px;
+}
+.btn-text-link:hover { text-decoration: underline; }
+#google-signin-wrap.hidden, #signed-in-wrap.hidden { display: none; }
+
+/* TriviaRush multiplayer — correct-answer reveal */
+.trivia-mp-correct {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--success, #198754);
+    margin: 6px 0 4px;
+}

@@ -352,6 +352,31 @@
         </div>
         <div id="bulk-preview-out" style="margin-top:12px;"></div>
       </div>
+
+      <div class="card">
+        <h2>Import a file (CSV or Excel)</h2>
+        <p class="hint">Upload a question bank as a <b>.csv</b> or <b>.xlsx</b> file. Download the template first, fill it in (Excel, Google Sheets, or Numbers all work), then upload it. The game randomizes everything automatically.</p>
+
+        <label>What are you importing?</label>
+        <select id="imp-kind">
+          <option value="trivia">Trivia questions</option>
+          <option value="pictionary">Pictionary puzzles</option>
+          <option value="footy">FootyMind players</option>
+          <option value="geo_flag">Geography — flags</option>
+          <option value="geo_landmark">Geography — landmarks</option>
+        </select>
+
+        <div class="hint" id="imp-guide" style="margin-top:10px;"></div>
+
+        <div class="row" style="margin-top:12px;">
+          <button class="btn btn-ghost" id="imp-template" style="flex:0 0 auto;">⬇ Download template</button>
+        </div>
+
+        <label style="margin-top:14px;">Choose your filled-in file</label>
+        <input type="file" id="imp-file" accept=".csv,.xlsx,.xlsm" style="padding:9px;">
+        <button class="btn btn-primary" id="imp-upload" style="margin-top:12px;">Upload &amp; import</button>
+        <div id="imp-result" style="margin-top:12px;"></div>
+      </div>
     </section>
 
     <!-- PLAYERS -->
@@ -679,6 +704,42 @@ $('bulk-submit').onclick = async ()=>{
   } else flash($('global-msg'), data.error||'Bulk add failed', false);
 };
 
+// ===== FILE IMPORT (CSV / Excel) =====
+const IMPORT_GUIDES = {
+  trivia: 'Columns: <code>category, question, correct_answer, wrong_answer_1, wrong_answer_2, wrong_answer_3, explanation</code>. The correct answer goes in its own column; the system shuffles the options. Categories: football, geography, science, movies, music, history, pop.',
+  pictionary: 'Columns: <code>emoji, answer, category, alternates</code>. Put extra accepted spellings in <i>alternates</i>, separated by commas.',
+  footy: 'Columns: <code>player_name, nationality, position, difficulty, aliases, career</code>. Write the career as <code>years:club; years:club</code> — e.g. <code>2004-2021:Barcelona; 2023-now:Inter Miami</code>. Difficulty: easy, medium, hard.',
+  geo_flag: 'Columns: <code>country_name, iso2_code, image_url, difficulty</code>. Use a 2-letter code (jp, br, gb) for an automatic flag image, OR paste a direct image_url. Difficulty: easy, medium, hard.',
+  geo_landmark: 'Columns: <code>landmark_name, country, image_url, difficulty</code>. The image_url should point directly to an image. Difficulty: easy, medium, hard.',
+};
+function impGuide(){ $('imp-guide').innerHTML = IMPORT_GUIDES[$('imp-kind').value] || ''; }
+$('imp-kind').onchange = impGuide;
+$('imp-template').onclick = ()=>{ window.location.href = `/api/admin/template/${$('imp-kind').value}`; };
+$('imp-upload').onclick = async ()=>{
+  const kind = $('imp-kind').value;
+  const file = $('imp-file').files[0];
+  if(!file){ flash($('global-msg'),'Choose a file first',false); return; }
+  const fd = new FormData(); fd.append('file', file);
+  $('imp-result').innerHTML = '<div class="hint">Uploading…</div>';
+  try {
+    const r = await fetch(`/api/admin/import/${kind}`, {method:'POST', body:fd});
+    const data = await r.json();
+    if(r.status===200){
+      let html = `<div class="msg ok" style="display:block;">Imported ${data.added} item(s)${data.rejected_count?`, skipped ${data.rejected_count}`:''} ✓</div>`;
+      if(data.errors && data.errors.length){
+        html += '<div class="hint" style="margin-top:8px; color:var(--danger);">Skipped rows:</div>';
+        data.errors.forEach(e=>{ html += `<div class="item" style="border-color:var(--danger-soft);"><div class="item-main"><div class="t">Row ${e.row}: ${esc(e.error)}</div></div></div>`; });
+      }
+      $('imp-result').innerHTML = html;
+      $('imp-file').value=''; loadAll();
+    } else {
+      $('imp-result').innerHTML = `<div class="msg err" style="display:block;">${esc(data.error||'Import failed')}</div>`;
+    }
+  } catch(err){
+    $('imp-result').innerHTML = `<div class="msg err" style="display:block;">Upload failed: ${esc(String(err))}</div>`;
+  }
+};
+
 // ===== PLAYERS =====
 async function loadPlayers(){
   const {data} = await api('/api/admin/players');
@@ -789,7 +850,7 @@ document.querySelectorAll('.tab').forEach(t=>{
     else if(name==='games'){ loadGames(); }
     else if(name==='announce'){ loadAnnouncement(); }
     else if(name==='rooms'){ loadRooms(); }
-    else if(name==='bulk'){ bulkFormatToggle(); }
+    else if(name==='bulk'){ bulkFormatToggle(); impGuide(); }
   });
 });
 

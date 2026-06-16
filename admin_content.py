@@ -203,6 +203,142 @@ def bulk_add(kind: str, items: list) -> dict:
     return {'added': added, 'failed': failed}
 
 
+# ===== Spreadsheet import (CSV / XLSX) =====
+# Column headers expected per kind. Matching is case-insensitive and ignores
+# spaces/underscores, so "Correct Answer", "correct_answer", "CorrectAnswer"
+# all map to the same field.
+
+IMPORT_COLUMNS = {
+    'trivia':       ['category', 'question', 'correct_answer', 'wrong_answer_1',
+                     'wrong_answer_2', 'wrong_answer_3', 'explanation'],
+    'pictionary':   ['emoji', 'answer', 'category', 'alternates'],
+    'footy':        ['player_name', 'nationality', 'position', 'difficulty',
+                     'aliases', 'career'],
+    'geo_flag':     ['country_name', 'iso2_code', 'image_url', 'difficulty'],
+    'geo_landmark': ['landmark_name', 'country', 'image_url', 'difficulty'],
+}
+
+
+def _norm_header(h: str) -> str:
+    return ''.join(ch for ch in (h or '').lower() if ch.isalnum())
+
+
+def _rows_to_items(kind: str, header: list, rows: list) -> dict:
+    """Map parsed spreadsheet rows to native admin items.
+    Returns {items:[...], errors:[{row,error}]}."""
+    norm_map = {_norm_header(h): i for i, h in enumerate(header)}
+
+    def cell(row, colname):
+        idx = norm_map.get(_norm_header(colname))
+        if idx is None or idx >= len(row):
+            return ''
+        v = row[idx]
+        return ('' if v is None else str(v)).strip()
+
+    items, errors = [], []
+    for rnum, row in enumerate(rows, start=2):  # row 1 is the header
+        if not any((c is not None and str(c).strip()) for c in row):
+            continue  # skip blank lines
+        try:
+            if kind == 'trivia':
+                q = cell(row, 'question')
+                correct = cell(row, 'correct_answer')
+                wrongs = [cell(row, 'wrong_answer_1'), cell(row, 'wrong_answer_2'),
+                          cell(row, 'wrong_answer_3')]
+                opts = [correct] + [w for w in wrongs if w]
+                if not q or not correct or len(opts) < 2:
+                    errors.append({'row': rnum, 'error': 'need question, correct_answer, and at least one wrong answer'})
+                    continue
+                items.append({'cat': (cell(row, 'category') or 'pop').lower(),
+                              'type': 'mc', 'q': q, 'options': opts, 'answer': 0,
+                              'explain': cell(row, 'explanation')})
+            elif kind == 'pictionary':
+                emoji = cell(row, 'emoji'); answer = cell(row, 'answer')
+                if not emoji or not answer:
+                    errors.append({'row': rnum, 'error': 'need emoji and answer'}); continue
+                items.append({'emoji': emoji, 'answer': answer,
+                              'category': cell(row, 'category') or 'word',
+                              'alternates': cell(row, 'alternates')})
+            elif kind == 'footy':
+                name = cell(row, 'player_name')
+                career_raw = cell(row, 'career')
+                # career format: "2004-2021:Barcelona; 2021-2023:PSG"
+                path = []
+                for seg in career_raw.replace('\n', ';').split(';'):
+                    seg = seg.strip()
+                    if not seg:
+                        continue
+                    if ':' in seg:
+                        yrs, club = seg.split(':', 1)
+                        if club.strip():
+                            path.append([yrs.strip(), club.strip()])
+                if not name or not path:
+                    errors.append({'row': rnum, 'error': 'need player_name and career (format: "years:club; years:club")'}); continue
+                items.append({'name': name, 'nationality': cell(row, 'nationality'),
+                              'position': cell(row, 'position'),
+                              'difficulty': (cell(row, 'difficulty') or 'medium').lower(),
+                              'aliases': cell(row, 'aliases'), 'path': path})
+            elif kind == 'geo_flag':
+                name = cell(row, 'country_name')
+                iso2 = cell(row, 'iso2_code'); url = cell(row, 'image_url')
+                if not name or (not iso2 and not url):
+                    errors.append({'row': rnum, 'error': 'need country_name and (iso2_code or image_url)'}); continue
+                items.append({'name': name, 'iso2': iso2, 'image_url': url,
+                              'difficulty': (cell(row, 'difficulty') or 'medium').lower()})
+            elif kind == 'geo_landmark':
+                name = cell(row, 'landmark_name'); url = cell(row, 'image_url')
+                if not name or not url:
+                    errors.append({'row': rnum, 'error': 'need landmark_name and image_url'}); continue
+                items.append({'name': name, 'country': cell(row, 'country'),
+                              'image_url': url,
+                              'difficulty': (cell(row, 'difficulty') or 'medium').lower()})
+        except Exception as e:
+            errors.append({'row': rnum, 'error': str(e)})
+    return {'items': items, 'errors': errors}
+
+
+def parse_spreadsheet(kind: str, filename: str, data: bytes) -> dict:
+    """Parse uploaded CSV or XLSX bytes into native items.
+    Returns {items, errors, header}."""
+    import io
+    fn = (filename or '').lower()
+    header, rows = [], []
+    if fn.endswith('.xlsx') or fn.endswith('.xlsm'):
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        ws = wb.active
+        all_rows = [[c for c in row] for row in ws.iter_rows(values_only=True)]
+        wb.close()
+        if all_rows:
+            header = [('' if h is None else str(h)) for h in all_rows[0]]
+            rows = all_rows[1:]
+    else:
+        # CSV (also handles tab/semicolon by sniffing)
+        import csv
+        text = data.decode('utf-8-sig', errors='replace')
+        try:
+            dialect = csv.Sniffer().sniff(text[:2000], delimiters=',;\t')
+        except Exception:
+            dialect = csv.excel
+        reader = list(csv.reader(io.StringIO(text), dialect))
+        if reader:
+            header = reader[0]
+            rows = reader[1:]
+    if not header:
+        return {'items': [], 'errors': [{'row': 0, 'error': 'file appears empty'}], 'header': []}
+    parsed = _rows_to_items(kind, header, rows)
+    parsed['header'] = header
+    return parsed
+
+
+def import_spreadsheet(kind: str, filename: str, data: bytes) -> dict:
+    """Parse + add. Returns {added, errors, total_rows}."""
+    parsed = parse_spreadsheet(kind, filename, data)
+    result = bulk_add(kind, parsed['items']) if parsed['items'] else {'added': 0, 'failed': []}
+    return {'added': result['added'], 'errors': parsed['errors'],
+            'rejected_count': len(parsed['errors'])}
+
+
 # ----- Merge helpers: convert admin items into the game's native format -----
 
 def merged_trivia(builtin_questions: list) -> list:
