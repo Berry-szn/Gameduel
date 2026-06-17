@@ -407,7 +407,7 @@ function debugLogInit() {
 // Build version this JS file expects. Must match server's /version response.
 // Auto-reload if they diverge (catches stale browser caches even when the
 // no-cache headers are bypassed by a proxy / service worker).
-const GAMEROOM_BUILD = 'v46';
+const GAMEROOM_BUILD = 'v48';
 async function checkBuildVersion() {
     try {
         const res = await fetch('/version', {cache: 'no-store'});
@@ -7772,11 +7772,18 @@ const FB = {
     _mpRes: null,
     _mpResultShown: false,
     _mpLastResultId: null,
+    _mpStageShown: null,
+    _mpStageId: null,
+    _mpHtOpen: false,
+    _mpHtSubmitted: false,
+    _mpHtOppReady: false,
+    _mpHtTimer: null,
     // ---- match presentation ----
     _speed: 1,
     _skip: false,
     _pitch: null,
     _pitchTimer: null,
+    _playersTimer: null,
     _pitchPoss: 50,
 };
 
@@ -7845,6 +7852,26 @@ async function fbDraft() {
     }
 }
 
+async function fbChangeFormation(f) {
+    const chips = $('fb-squad-formations');
+    if (!f || f === FB.formation) { if (chips) chips.classList.add('hidden'); return; }
+    try {
+        const r = await fetch('/api/football/new?formation=' + encodeURIComponent(f));
+        if (!r.ok) throw new Error('http');
+        const d = await r.json();
+        FB.budget = d.budget;
+        FB.pool = d.pool || FB.pool;
+        FB.formation = d.squad.formation;
+        FB.starting = (d.squad.starting || []).slice();
+        FB.benchPlayers = (d.squad.bench || []).slice();
+        if (chips) chips.classList.add('hidden');
+        fbRenderSquad();
+        toast('New ' + FB.formation + ' squad');
+    } catch (e) {
+        toast('Could not switch formation');
+    }
+}
+
 function fbRenderSquad() {
     const sqBack = document.querySelector('#screen-football-squad .back-link');
     if (sqBack) {
@@ -7856,7 +7883,18 @@ function fbRenderSquad() {
             sqBack.onclick = (e) => { if (e) e.preventDefault(); try { soundClick(); } catch (er) {} showScreen('screen-football-setup'); };
         }
     }
-    $('fb-squad-formation').textContent = FB.formation;
+    const fp = $('fb-squad-formation');
+    if (fp) {
+        fp.textContent = FB.formation + '  \u25be';
+        fp.style.cursor = 'pointer';
+        fp.title = 'Tap to change formation';
+        fp.onclick = () => {
+            try { soundClick(); } catch (e) {}
+            const chips = $('fb-squad-formations');
+            if (chips) chips.classList.toggle('hidden');
+        };
+    }
+    fbRenderChips('fb-squad-formations', FB.FORMATION_LIST, FB.formation, f => fbChangeFormation(f));
     $('fb-budget-total').textContent = '$' + FB.budget + 'm';
     fbRenderBudget();
     fbRenderPitch();
@@ -8134,14 +8172,15 @@ function fbPitchSetup(homeFormation, awayFormation, homeColor, awayColor) {
     layer.innerHTML = '';
     const home = fbFormationPositions(homeFormation, 'home');
     const away = fbFormationPositions(awayFormation, 'away');
-    FB._pitch = { hc: homeColor, ac: awayColor, dots: [] };
-    const add = (list, color, cls) => list.forEach(p => {
+    FB._pitch = { hc: homeColor, ac: awayColor, dots: [], base: [] };
+    const add = (list, color, cls) => list.forEach((p, idx) => {
         const c = document.createElementNS(NS, 'circle');
         c.setAttribute('cx', p.x.toFixed(1)); c.setAttribute('cy', p.y.toFixed(1));
         c.setAttribute('r', '1.7'); c.setAttribute('fill', color);
         c.setAttribute('stroke', 'rgba(0,0,0,.35)'); c.setAttribute('stroke-width', '0.3');
         c.setAttribute('class', 'fb-pitch-dot ' + cls);
         layer.appendChild(c); FB._pitch.dots.push(c);
+        FB._pitch.base.push({ x: p.x, y: p.y, home: cls === 'home', gk: idx === 0 });
     });
     add(home, homeColor, 'home');
     add(away, awayColor, 'away');
@@ -8162,10 +8201,54 @@ function fbPitchAmbientStart(possHome) {
         const x = homeHas ? (45 + Math.random() * 40) : (15 + Math.random() * 40);
         fbPitchBall(x, 12 + Math.random() * 40);
     }, 600);
+    fbPlayersLiveStart();
 }
 
 function fbPitchAmbientStop() {
     if (FB._pitchTimer) { clearInterval(FB._pitchTimer); FB._pitchTimer = null; }
+    fbPlayersLiveStop();
+}
+
+function fbPlayersLiveStart() {
+    fbPlayersLiveStop();
+    if (!FB._pitch || !FB._pitch.dots || !FB._pitch.dots.length) return;
+    FB._playersTimer = setInterval(() => {
+        const ball = $('fb-pitch-ball');
+        const bx = ball ? parseFloat(ball.getAttribute('cx')) : 50;
+        const by = ball ? parseFloat(ball.getAttribute('cy')) : 32;
+        FB._pitch.dots.forEach((d, i) => {
+            const b = FB._pitch.base[i];
+            if (!b) return;
+            let tx, ty;
+            if (b.gk) {
+                // keeper hugs the goal, shuffles a little with the play
+                tx = b.x + (bx - 50) * 0.05;
+                ty = 32 + (by - 32) * 0.22 + (Math.random() - 0.5) * 1.2;
+            } else {
+                // the team shape drifts toward the play; each player keeps their
+                // relative role but pulls toward the ball, with a little jitter so
+                // nobody looks frozen
+                tx = b.x + (bx - b.x) * 0.17 + (Math.random() - 0.5) * 2.8;
+                ty = b.y + (by - b.y) * 0.12 + (Math.random() - 0.5) * 2.8;
+            }
+            tx = Math.max(3, Math.min(97, tx));
+            ty = Math.max(5, Math.min(59, ty));
+            d.setAttribute('cx', tx.toFixed(1));
+            d.setAttribute('cy', ty.toFixed(1));
+        });
+    }, 720);
+}
+
+function fbPlayersLiveStop() {
+    if (FB._playersTimer) { clearInterval(FB._playersTimer); FB._playersTimer = null; }
+    if (FB._pitch && FB._pitch.dots) {
+        FB._pitch.dots.forEach((d, i) => {
+            const b = FB._pitch.base[i];
+            if (!b) return;
+            d.setAttribute('cx', b.x.toFixed(1));
+            d.setAttribute('cy', b.y.toFixed(1));
+        });
+    }
 }
 
 function fbPitchGoal(side) {
@@ -8301,6 +8384,13 @@ function fbShowHalftime() {
     $('fb-ht-subs-left').textContent = '(' + (3 - FB.htSubsUsed) + ' left)';
     fbRenderHtBench();
     fbRenderChips('fb-ht-tactic', FB.TACTIC_LIST, FB.htTactic, t => { FB.htTactic = t; });
+    const second = $('fb-secondhalf');
+    if (second) {
+        second.disabled = false;
+        second.textContent = 'Play second half';
+        second.onclick = () => { try { soundClick(); } catch (e) {} fbSecondHalf(); };
+    }
+    const opp = $('fb-ht-opp-status'); if (opp) opp.textContent = '';
     $('fb-ht-panel').classList.remove('hidden');
     try { $('fb-ht-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {}
 }
@@ -8584,6 +8674,11 @@ function renderFbMpDraft(s) {
     FB._mpReady = !!(f.ready && f.ready[mySid]);
     FB._mpOppReady = !!(f.ready && f.ready[oppSid]);
     FB._mpResultShown = false;     // a fresh draft means the next match should replay
+    FB._mpStageShown = null;
+    FB._mpStageId = null;
+    FB._mpHtOpen = false;
+    FB._mpHtSubmitted = false;
+    FB._mpHtOppReady = false;
     if (!FB._mpDrafted && !FB._mpDrafting) {
         FB._mpDrafting = true;
         fbMpStartDraft();
@@ -8627,17 +8722,44 @@ function renderFbMpMatch(s) {
     const f = s.football_mp || {};
     const res = f.result;
     if (!res) return;
-    if (FB._mpResultShown && FB._mpLastResultId === res.result_id) return;
-    FB._mpResultShown = true;
-    FB._mpLastResultId = res.result_id;
-    if (res.forfeit) { fbMpForfeit(res, s); return; }
-    if (res.mode === 'group') { renderFbGroupResult(res, s); return; }
+    if (res.forfeit) {
+        if (FB._mpResultShown && FB._mpLastResultId === res.result_id) return;
+        FB._mpResultShown = true; FB._mpLastResultId = res.result_id;
+        fbMpForfeit(res, s); return;
+    }
+    if (res.mode === 'group') {
+        if (FB._mpResultShown && FB._mpLastResultId === res.result_id) return;
+        FB._mpResultShown = true; FB._mpLastResultId = res.result_id;
+        renderFbGroupResult(res, s); return;
+    }
     const mySid = (s.me && s.me.sid) || State.mySid;
     const mySide = (res.home_sid === mySid) ? 'home' : 'away';
-    fbMpReplay(res, mySide);
+    const oppSid = (mySide === 'home') ? res.away_sid : res.home_sid;
+    FB._mpHtOppReady = !!((f.ht_ready || {})[oppSid]);
+    const stage = res.stage || 'ft';
+    if (stage === 'h1') {
+        // Already replaying / showing this same first half? Just refresh the
+        // opponent's "making changes / ready" status, don't replay again.
+        if (FB._mpStageShown === 'h1' && FB._mpStageId === res.result_id) {
+            if (FB._mpHtOpen) fbMpHtUpdateStatus();
+            return;
+        }
+        FB._mpStageShown = 'h1'; FB._mpStageId = res.result_id;
+        FB._mpHtOpen = false; FB._mpHtSubmitted = false;
+        fbMpReplayHalf(res, mySide, 1);
+        return;
+    }
+    // Full time
+    if (FB._mpResultShown && FB._mpLastResultId === res.result_id) return;
+    FB._mpResultShown = true; FB._mpLastResultId = res.result_id;
+    // If we actually watched the first half, just play the second; otherwise
+    // (late join / reconnect straight into FT) replay the whole match.
+    const which = (FB._mpStageShown === 'h1') ? 2 : 'full';
+    fbMpReplayHalf(res, mySide, which);
 }
 
 function fbMpForfeit(res, s) {
+    if (FB._mpHtTimer) { clearInterval(FB._mpHtTimer); FB._mpHtTimer = null; }
     if (FB._matchTimer) { try { cancelAnimationFrame(FB._matchTimer); } catch (e) {} FB._matchTimer = null; }
     fbPitchAmbientStop();
     const mySid = (s.me && s.me.sid) || State.mySid;
@@ -8676,6 +8798,7 @@ function fbMpForfeit(res, s) {
 
 function fbLeaveMp() {
     FB._inMp = false; FB._mpReady = false; FB._mpDrafted = false; FB._mpDrafting = false;
+    if (FB._mpHtTimer) { clearInterval(FB._mpHtTimer); FB._mpHtTimer = null; }
     if (FB._matchTimer) { try { cancelAnimationFrame(FB._matchTimer); } catch (e) {} FB._matchTimer = null; }
     fbPitchAmbientStop();
     leaveCurrentRoomIfAny();
@@ -8749,6 +8872,121 @@ function fbMpReplay(res, mySide) {
     FB._skip = false;
     fbPitchSetup(FB.formation || '4-3-3', '4-3-3', '#2563eb', '#ef4444');
     fbAnimateSegment(evs, 0, 90, 0, 0, myPoss, 60000, () => fbMpShowResult());
+}
+
+function fbMpReplayHalf(res, mySide, which) {
+    if (FB._mpHtTimer) { clearInterval(FB._mpHtTimer); FB._mpHtTimer = null; }
+    const myName = (mySide === 'home') ? res.home_name : res.away_name;
+    const oppName = (mySide === 'home') ? res.away_name : res.home_name;
+    FB._matchData = { cpu_name: oppName };
+    FB._mpRes = res;
+    FB._mpSide = mySide;
+    const allEv = fbMpMapEvents(res.events || [], mySide);
+    const poss = (res.stats && res.stats.possession_home) || 50;
+    const myPoss = (mySide === 'home') ? poss : (100 - poss);
+    $('fb-you-name').textContent = myName || 'You';
+    $('fb-cpu-name').textContent = oppName || 'Opponent';
+    const yc = $('fb-you-crest'); if (yc) yc.textContent = fbInitials(myName || 'You');
+    const cc = $('fb-cpu-crest'); if (cc) cc.textContent = fbInitials(oppName || 'Opp');
+    const myVal = (mySide === 'home') ? res.home_value : res.away_value;
+    const oppVal = (mySide === 'home') ? res.away_value : res.home_value;
+    const yv = $('fb-you-val'); if (yv) yv.textContent = (typeof myVal === 'number') ? '\u00a3' + myVal.toFixed(1) + 'm' : '';
+    const cv = $('fb-cpu-val'); if (cv) cv.textContent = (typeof oppVal === 'number') ? '\u00a3' + oppVal.toFixed(1) + 'm' : '';
+    $('fb-ht-panel').classList.add('hidden');
+    $('fb-ft-panel').classList.add('hidden');
+    $('fb-poss-fill').style.width = '50%';
+    $('fb-poss-you').textContent = '50%';
+    $('fb-poss-cpu').textContent = '50%';
+    FB._skip = false;
+    showScreen('screen-football-match');
+    const myForm = (mySide === 'home') ? res.home_formation : res.away_formation;
+    const oppForm = (mySide === 'home') ? res.away_formation : res.home_formation;
+    fbPitchSetup(myForm || FB.formation || '4-3-3', oppForm || '4-3-3', '#2563eb', '#ef4444');
+    if (which === 1) {
+        $('fb-feed').innerHTML = '';
+        $('fb-score').textContent = '0-0';
+        $('fb-clock').textContent = "0'";
+        const ev1 = allEv.filter(e => (e.minute || 0) <= 45);
+        fbAnimateSegment(ev1, 0, 45, 0, 0, myPoss, 26000, () => fbMpHtPanel(res, mySide));
+    } else if (which === 2) {
+        const h1h = res.h1_home || 0, h1a = res.h1_away || 0;
+        const ihs = (mySide === 'home') ? h1h : h1a;
+        const ias = (mySide === 'home') ? h1a : h1h;
+        $('fb-score').textContent = ihs + '-' + ias;
+        $('fb-clock').textContent = "45'";
+        const ev2 = allEv.filter(e => (e.minute || 0) > 45);
+        fbAnimateSegment(ev2, 45, 90, ihs, ias, myPoss, 26000, () => fbMpShowResult());
+    } else {
+        $('fb-feed').innerHTML = '';
+        $('fb-score').textContent = '0-0';
+        $('fb-clock').textContent = "0'";
+        fbAnimateSegment(allEv, 0, 90, 0, 0, myPoss, 48000, () => fbMpShowResult());
+    }
+}
+
+function fbMpHtPanel(res, mySide) {
+    FB._mpHtOpen = true;
+    fbPitchAmbientStop();
+    const myScore = (mySide === 'home') ? res.home_score : res.away_score;
+    const oppScore = (mySide === 'home') ? res.away_score : res.home_score;
+    $('fb-score').textContent = myScore + '-' + oppScore;
+    $('fb-clock').textContent = 'HT';
+    $('fb-ht-score').textContent = myScore + '-' + oppScore;
+    FB.htStarting = (FB.starting || []).slice();
+    FB.htBench = (FB.benchPlayers || []).slice();
+    FB.htTactic = FB.tactic || 'balanced';
+    FB.htSubsUsed = 0;
+    $('fb-ht-subs-left').textContent = '(3 left)';
+    fbRenderHtBench();
+    fbRenderChips('fb-ht-tactic', FB.TACTIC_LIST, FB.htTactic, t => { FB.htTactic = t; });
+    const second = $('fb-secondhalf');
+    let secs = 40;   // bounded so the match never hangs on a slow/AFK opponent
+    const doConfirm = () => {
+        if (FB._mpHtSubmitted) return;
+        if (FB._mpHtTimer) { clearInterval(FB._mpHtTimer); FB._mpHtTimer = null; }
+        socket.emit('football_ht_ready', {
+            squad: {
+                formation: FB.formation,
+                starting: (FB.htStarting || []).map(p => p.id),
+                bench: (FB.htBench || []).map(p => p.id),
+            },
+            tactic: FB.htTactic,
+        });
+        FB._mpHtSubmitted = true;
+        if (second) { second.disabled = true; second.textContent = 'Waiting for opponent...'; }
+        fbMpHtUpdateStatus();
+    };
+    if (second) {
+        second.disabled = false;
+        second.textContent = 'Confirm changes \u00b7 second half (' + secs + 's)';
+        second.onclick = () => { try { soundClick(); } catch (e) {} doConfirm(); };
+    }
+    if (FB._mpHtTimer) { clearInterval(FB._mpHtTimer); FB._mpHtTimer = null; }
+    FB._mpHtTimer = setInterval(() => {
+        if (FB._mpHtSubmitted) return;
+        secs--;
+        if (second) second.textContent = 'Confirm changes \u00b7 second half (' + Math.max(0, secs) + 's)';
+        if (secs <= 0) doConfirm();
+    }, 1000);
+    $('fb-ht-panel').classList.remove('hidden');
+    try { $('fb-ht-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {}
+    fbMpHtUpdateStatus();
+}
+
+function fbMpHtUpdateStatus() {
+    let el = $('fb-ht-opp-status');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'fb-ht-opp-status';
+        el.className = 'muted small center';
+        el.style.marginTop = '8px';
+        const panel = $('fb-ht-panel');
+        if (panel) panel.appendChild(el);
+    }
+    if (FB._mpHtOppReady && FB._mpHtSubmitted) el.textContent = 'Both ready \u2014 kicking off the second half...';
+    else if (FB._mpHtOppReady) el.textContent = 'Your opponent is ready and waiting for you.';
+    else if (FB._mpHtSubmitted) el.textContent = 'Waiting for your opponent to finish their changes...';
+    else el.textContent = 'Your opponent is making their changes too.';
 }
 
 function fbMpShowResult() {

@@ -2389,10 +2389,16 @@ def on_join_room(data):
                         fbmp['home_sid'] = sid
                     if fbmp.get('away_sid') == old_sid:
                         fbmp['away_sid'] = sid
-                    for _k in ('submissions', 'names', 'uids'):
+                    for _k in ('submissions', 'names', 'uids', 'ht'):
                         _d = fbmp.get(_k)
                         if isinstance(_d, dict) and old_sid in _d:
                             _d[sid] = _d.pop(old_sid)
+                    _r = fbmp.get('result')
+                    if isinstance(_r, dict):
+                        if _r.get('home_sid') == old_sid:
+                            _r['home_sid'] = sid
+                        if _r.get('away_sid') == old_sid:
+                            _r['away_sid'] = sid
                     # If everyone is ready now (this manager readied just before
                     # the blip), run the match that was waiting on them.
                     if state.get('phase') == 'fb_draft':
@@ -2403,7 +2409,7 @@ def on_join_room(data):
                                 if fbmp.get('mode') == 'group':
                                     _fb_run_group(fbmp)
                                 else:
-                                    _fb_run_faceoff(fbmp)
+                                    _fb_run_faceoff_h1(fbmp)
                                 state['phase'] = 'fb_match'
                             except Exception as e:
                                 print('[fbmp reconnect] resume failed:', e)
@@ -3997,7 +4003,7 @@ def on_mindmeld_rematch():
 def api_version():
     """Return current build tag. Client polls and reloads if its loaded
     version doesn't match — catches stale browser/edge caches."""
-    return jsonify({'version': 'v46'})
+    return jsonify({'version': 'v48'})
 
 
 def _no_cache_html(resp):
@@ -6521,7 +6527,7 @@ def admin_export():
     content = {k: _admin.list_items(k) for k in _admin.KINDS}
     payload = {
         'exported_at': time.time(),
-        'version': 'v46',
+        'version': 'v48',
         'profiles': profiles,
         'admin_content': content,
         'settings': _admin.get_settings(),
@@ -7022,7 +7028,7 @@ def _fb_award_forfeit(state, leaver_sid, leaver_name, winner):
     result. Returns the result dict, or None if a match result already exists
     (a played match is never overwritten) or there is no football_mp."""
     fbmp = state.get('football_mp')
-    if not fbmp or fbmp.get('result'):
+    if not fbmp or (fbmp.get('result') and fbmp.get('stage') == 'ft'):
         return None
     uids = fbmp.get('uids', {})
     names = fbmp.get('names', {})
@@ -7279,6 +7285,9 @@ def fbmp_public_state(fbmp):
         'names': names,
         'ready': ready,
     }
+    out['stage'] = fbmp.get('stage')
+    ht = fbmp.get('ht') or {}
+    out['ht_ready'] = {s: bool((ht.get(s) or {}).get('ready')) for s in names}
     if fbmp.get('phase') == 'match' and fbmp.get('result'):
         out['result'] = fbmp['result']
     return out
@@ -7388,7 +7397,7 @@ def on_football_ready(data):
             if fbmp.get('mode') == 'group':
                 _fb_run_group(fbmp)
             else:
-                _fb_run_faceoff(fbmp)
+                _fb_run_faceoff_h1(fbmp)
             state['phase'] = 'fb_match'
         touch_room(room)
     broadcast_state(room['state'], code)
@@ -7446,6 +7455,165 @@ def _fb_run_faceoff(fbmp):
         print('[fbmp] league record failed:', e)
 
 
+def _fb_run_faceoff_h1(fbmp):
+    """First half of a 1v1 (minutes 1-45). Hands the clients a half-time result
+    so each manager can change shape / make subs before the second half; the
+    opponent sees that they are making changes. No ratings move until full time."""
+    home_sid = fbmp['home_sid']
+    away_sid = fbmp['away_sid']
+    hs = fbmp['submissions'][home_sid]
+    as_ = fbmp['submissions'][away_sid]
+    m = _fbmatch.simulate_match(
+        hs['squad'], as_['squad'],
+        home_tactic=hs['tactic'], away_tactic=as_['tactic'],
+        give_home_edge=False, away_ai=False,
+        home_name=fbmp['names'][home_sid], away_name=fbmp['names'][away_sid],
+        minute_start=1, minute_end=_fbmatch.HALF_MINUTES)
+    rs = m.get('resume_state', {}) or {}
+    sh = rs.get('shots') or {}
+    so = rs.get('sot') or {}
+    po = rs.get('poss') or {}
+    _ph = po.get('home', 0)
+    _pa = po.get('away', 0)
+    _tot = (_ph + _pa) or 1
+    poss_home = max(25, min(75, round(100 * _ph / _tot)))
+    h1_stats = {
+        'possession_home': poss_home, 'possession_away': 100 - poss_home,
+        'shots_home': sh.get('home', 0), 'shots_away': sh.get('away', 0),
+        'sot_home': so.get('home', 0), 'sot_away': so.get('away', 0),
+    }
+    fbmp['h1'] = {
+        'resume': rs,
+        'hs': m['home_score'], 'as': m['away_score'],
+        'events': m['events'],
+    }
+    fbmp['ht'] = {}
+    fbmp['stage'] = 'h1'
+    fbmp['result'] = {
+        'mode': 'faceoff', 'stage': 'h1',
+        'home_sid': home_sid, 'away_sid': away_sid,
+        'home_name': fbmp['names'][home_sid], 'away_name': fbmp['names'][away_sid],
+        'home_score': m['home_score'], 'away_score': m['away_score'],
+        'events': m['events'], 'stats': h1_stats,
+        'home_zones': _fbgame.zone_strengths(hs['squad']),
+        'away_zones': _fbgame.zone_strengths(as_['squad']),
+        'home_formation': hs['squad'].get('formation', '4-3-3'),
+        'away_formation': as_['squad'].get('formation', '4-3-3'),
+        'home_value': _fbgame.squad_cost(hs['squad']),
+        'away_value': _fbgame.squad_cost(as_['squad']),
+        'result_id': int(time.time() * 1000),
+    }
+    fbmp['phase'] = 'match'
+
+
+def _fb_run_faceoff_h2(fbmp):
+    """Second half (46-90) using each manager's half-time XI + tactic, resuming
+    from the first-half score. Builds the full-time result and moves ratings."""
+    home_sid = fbmp['home_sid']
+    away_sid = fbmp['away_sid']
+    h1 = fbmp.get('h1', {})
+    rs = h1.get('resume', {}) or {}
+    ht = fbmp.get('ht', {}) or {}
+
+    def side_cfg(sid):
+        sub = fbmp['submissions'][sid]
+        h = ht.get(sid) or {}
+        return (h.get('squad') or sub['squad']), (h.get('tactic') or sub['tactic'])
+
+    home_squad, home_tactic = side_cfg(home_sid)
+    away_squad, away_tactic = side_cfg(away_sid)
+    m = _fbmatch.simulate_match(
+        home_squad, away_squad,
+        home_tactic=home_tactic, away_tactic=away_tactic,
+        give_home_edge=False, away_ai=False,
+        home_name=fbmp['names'][home_sid], away_name=fbmp['names'][away_sid],
+        minute_start=_fbmatch.HALF_MINUTES + 1, minute_end=90,
+        init_hs=h1.get('hs', 0), init_as=h1.get('as', 0),
+        init_shots=rs.get('shots'), init_sot=rs.get('sot'), init_poss=rs.get('poss'))
+    all_events = (h1.get('events') or []) + m['events']
+    if m['home_score'] > m['away_score']:
+        home_oc, away_oc = 'win', 'loss'
+    elif m['home_score'] < m['away_score']:
+        home_oc, away_oc = 'loss', 'win'
+    else:
+        home_oc = away_oc = 'draw'
+    fbmp['result'] = {
+        'mode': 'faceoff', 'stage': 'ft',
+        'home_sid': home_sid, 'away_sid': away_sid,
+        'home_name': fbmp['names'][home_sid], 'away_name': fbmp['names'][away_sid],
+        'home_score': m['home_score'], 'away_score': m['away_score'],
+        'h1_home': h1.get('hs', 0), 'h1_away': h1.get('as', 0),
+        'events': all_events, 'stats': m['stats'],
+        'home_zones': _fbgame.zone_strengths(home_squad),
+        'away_zones': _fbgame.zone_strengths(away_squad),
+        'home_formation': home_squad.get('formation', '4-3-3'),
+        'away_formation': away_squad.get('formation', '4-3-3'),
+        'home_value': _fbgame.squad_cost(home_squad),
+        'away_value': _fbgame.squad_cost(away_squad),
+        'result_id': int(time.time() * 1000),
+    }
+    fbmp['stage'] = 'ft'
+    fbmp['phase'] = 'match'
+    uids = fbmp.get('uids', {})
+    try:
+        home_uid = uids.get(home_sid)
+        away_uid = uids.get(away_sid)
+        home_pre = _fb_get_rating(home_uid)
+        away_pre = _fb_get_rating(away_uid)
+        _fb_record_result(home_uid, fbmp['names'][home_sid],
+                          home_oc, away_pre, m['home_score'], m['away_score'])
+        _fb_record_result(away_uid, fbmp['names'][away_sid],
+                          away_oc, home_pre, m['away_score'], m['home_score'])
+        home_post = _fb_get_rating(home_uid)
+        away_post = _fb_get_rating(away_uid)
+        fbmp['result']['home_rating'] = home_post
+        fbmp['result']['away_rating'] = away_post
+        fbmp['result']['home_delta'] = home_post - home_pre
+        fbmp['result']['away_delta'] = away_post - away_pre
+        fbmp['result']['home_tier'] = _fbleague.tier_for(home_post)['name']
+        fbmp['result']['away_tier'] = _fbleague.tier_for(away_post)['name']
+    except Exception as e:
+        print('[fbmp] league record failed:', e)
+
+
+@socketio.on('football_ht_ready')
+def on_football_ht_ready(data):
+    """A manager locks in their half-time changes (subs + tactic). When both are
+    in, the second half is simulated with the new line-ups."""
+    sid = request.sid
+    room, code = _get_room_for_sid(sid)
+    if not room:
+        return
+    data = data or {}
+    sq = data.get('squad') or {}
+    tactic = data.get('tactic', _fbmatch.DEFAULT_TACTIC)
+    if tactic not in _fbmatch.TACTICS:
+        tactic = _fbmatch.DEFAULT_TACTIC
+    with room['lock']:
+        state = room['state']
+        fbmp = state.get('football_mp')
+        if not fbmp or fbmp.get('stage') != 'h1':
+            return
+        if sid not in fbmp.get('names', {}):
+            return
+        base = (fbmp.get('submissions', {}).get(sid) or {}).get('squad') or {}
+        squad = {
+            'formation': sq.get('formation', base.get('formation', _fbgame.DEFAULT_FORMATION)),
+            'starting': list(sq.get('starting', base.get('starting', []))),
+            'bench': list(sq.get('bench', base.get('bench', []))),
+        }
+        ok, why = _fbgame.validate_squad(squad)
+        if not ok:
+            emit('error_msg', {'msg': why})
+            return
+        fbmp.setdefault('ht', {})[sid] = {'squad': squad, 'tactic': tactic, 'ready': True}
+        sids = fbmp.get('sids') or list(fbmp.get('names', {}).keys())
+        if all((fbmp['ht'].get(s) or {}).get('ready') for s in sids):
+            _fb_run_faceoff_h2(fbmp)
+        touch_room(room)
+    broadcast_state(room['state'], code)
+
+
 @socketio.on('football_rematch')
 def on_football_rematch():
     """Send both players back to the draft for another match."""
@@ -7461,6 +7629,9 @@ def on_football_rematch():
         fbmp['submissions'] = {}
         fbmp['result'] = None
         fbmp['phase'] = 'draft'
+        fbmp['stage'] = None
+        fbmp['ht'] = {}
+        fbmp['h1'] = {}
         state['phase'] = 'fb_draft'
         touch_room(room)
     broadcast_state(room['state'], code)

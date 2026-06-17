@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#ffffff">
     <title>GameRoom</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=46">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=48">
     <!-- Google Identity Services (Sign in with Google). Loaded async; the
          client wires it up once /api/public/config returns the client id. -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -1578,6 +1578,7 @@
                 <h1>Your squad</h1>
                 <span class="fb-formation-pill" id="fb-squad-formation">4-3-3</span>
             </div>
+            <div class="segmented hidden" id="fb-squad-formations"></div>
             <div class="fb-cup-banner hidden" id="fb-cup-banner"></div>
 
             <div class="fb-budget-row">
@@ -2143,6 +2144,6 @@
         window.INITIAL_MATCH_CODE = "{{ match_code or '' }}";
     </script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="{{ url_for('static', filename='app.js') }}?v=46"></script>
+    <script src="{{ url_for('static', filename='app.js') }}?v=48"></script>
 </body>
 </html>
