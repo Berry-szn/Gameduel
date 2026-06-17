@@ -407,7 +407,7 @@ function debugLogInit() {
 // Build version this JS file expects. Must match server's /version response.
 // Auto-reload if they diverge (catches stale browser caches even when the
 // no-cache headers are bypassed by a proxy / service worker).
-const GAMEROOM_BUILD = 'v39';
+const GAMEROOM_BUILD = 'v40';
 async function checkBuildVersion() {
     try {
         const res = await fetch('/version', {cache: 'no-store'});
@@ -1114,13 +1114,25 @@ function renderLobby(s) {
     const gdCard = $('lobby-guessduel-card');
     const wcCard = $('lobby-wordchain-card');
     const geoCard = $('lobby-geography-card');
+    const fbCard = $('lobby-football-card');
     if (gdCard) gdCard.classList.add('hidden');
     if (wcCard) wcCard.classList.add('hidden');
     if (geoCard) geoCard.classList.add('hidden');
+    if (fbCard) fbCard.classList.add('hidden');
     if (gameType === 'wordchain') {
         if (wcCard) wcCard.classList.remove('hidden');
     } else if (gameType === 'geography') {
         if (geoCard) geoCard.classList.remove('hidden');
+    } else if (gameType === 'football') {
+        if (fbCard) {
+            const blurb = $('lobby-football-blurb');
+            if (blurb) {
+                blurb.textContent = (s.mode_hint === 'group')
+                    ? 'Everyone drafts a squad on a \u00a3100m budget, then plays a round-robin mini-league. Results count toward your global Manager Rating.'
+                    : 'Both managers draft a squad on a \u00a3100m budget, then face off over 90 minutes. The result counts toward your global Manager Rating.';
+            }
+            fbCard.classList.remove('hidden');
+        }
     } else {
         if (gdCard) gdCard.classList.remove('hidden');
     }
@@ -1170,7 +1182,7 @@ function renderLobby(s) {
 
     if (gameType === 'wordchain') {
         syncWordChainUI();
-    } else {
+    } else if (gameType !== 'football') {
         syncModeUI();
     }
 }
@@ -2695,7 +2707,7 @@ const GAME_MODE_CONFIG = {
         blurb: 'Draft a squad on a budget, pick your formation and tactics, then beat the CPU or a friend 1v1. Skill decides it, not luck.',
         solo: { available: true, desc: 'vs Computer' },
         faceoff: { available: true, desc: '1v1 online' },
-        group: { available: false, desc: 'Coming next' }
+        group: { available: true, desc: 'Friend mini-league' }
     },
     guessduel: {
         label: 'GuessDuel',
@@ -3130,6 +3142,13 @@ function wireLobby() {
     $('btn-start').onclick = () => {
         soundClick();
         const gameType = (State.serverState && State.serverState.game_type) || 'guessduel';
+        if (gameType === 'football') {
+            socket.emit('start_game', {
+                game_type: 'football',
+                mode: (State.serverState && State.serverState.mode_hint) || 'faceoff'
+            });
+            return;
+        }
         if (gameType === 'wordchain') {
             if (!State.selectedWcMode) {
                 toast('Choose a mode first: Solo, or With friends');
@@ -7724,6 +7743,12 @@ const FB = {
     _mpRes: null,
     _mpResultShown: false,
     _mpLastResultId: null,
+    // ---- match presentation ----
+    _speed: 1,
+    _skip: false,
+    _pitch: null,
+    _pitchTimer: null,
+    _pitchPoss: 50,
 };
 
 const FB_CUP_ROUNDS = ['Quarter-final', 'Semi-final', 'Final'];
@@ -7808,12 +7833,18 @@ function fbRenderSquad() {
         if (kick) { kick.textContent = 'Play ' + FB.cup.names[FB.cup.round]; kick.disabled = false; }
     } else if (FB.mode === 'mp') {
         if (banner) {
-            banner.textContent = '1v1 vs ' + (FB._mpOppName || 'Opponent')
-                + (FB._mpOppReady ? ' \u00b7 opponent ready' : '');
+            if (FB._mpMode === 'group') {
+                const tot = FB._mpPlayers || 0, rd = FB._mpReadyCount || 0;
+                banner.textContent = 'Mini-league \u00b7 ' + tot + ' managers'
+                    + (tot ? ' \u00b7 ' + rd + '/' + tot + ' ready' : '');
+            } else {
+                banner.textContent = '1v1 vs ' + (FB._mpOppName || 'Opponent')
+                    + (FB._mpOppReady ? ' \u00b7 opponent ready' : '');
+            }
             banner.classList.remove('hidden');
         }
         if (kick) {
-            kick.textContent = FB._mpReady ? 'Waiting for opponent...' : 'Ready';
+            kick.textContent = FB._mpReady ? 'Waiting for others...' : 'Ready';
             kick.disabled = !!FB._mpReady;
         }
     } else {
@@ -7948,6 +7979,8 @@ async function fbKickoff() {
         $('fb-you-name').textContent = d.result.home_name;
         $('fb-cpu-name').textContent = d.cpu_name;
         $('fb-cpu-crest').textContent = fbInitials(d.cpu_name);
+        const _yv = $('fb-you-val'); if (_yv) _yv.textContent = '\u00a3' + fbCost().toFixed(1) + 'm';
+        const _cv = $('fb-cpu-val'); if (_cv) _cv.textContent = (typeof d.cpu_value === 'number') ? '\u00a3' + d.cpu_value.toFixed(1) + 'm' : '';
         $('fb-score').textContent = '0-0';
         $('fb-clock').textContent = "0'";
         $('fb-feed').innerHTML = '';
@@ -7957,16 +7990,112 @@ async function fbKickoff() {
         $('fb-poss-you').textContent = '50%';
         $('fb-poss-cpu').textContent = '50%';
         showScreen('screen-football-match');
+        FB._skip = false;
+        fbPitchSetup(FB.formation,
+            (d.match_state && d.match_state.cpu && d.match_state.cpu.formation) || '4-3-3',
+            '#2563eb', '#ef4444');
 
         let possYou = 50;
         try {
             const p = d.match_state.resume.poss;
             possYou = Math.round(100 * p.home / (p.home + p.away));
         } catch (e) {}
-        fbAnimateSegment(d.result.events, 0, 45, 0, 0, possYou, 5000, () => fbShowHalftime());
+        fbAnimateSegment(d.result.events, 0, 45, 0, 0, possYou, 32000, () => fbShowHalftime());
     } catch (e) {
         toast('Match failed to start');
     }
+}
+
+function fbKitColor(name, fallback) {
+    if (!name) return fallback || '#2563eb';
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xffffff;
+    return 'hsl(' + (h % 360) + ',62%,52%)';
+}
+
+function fbFormationPositions(formation, side) {
+    const lines = String(formation || '4-3-3').split('-').map(n => parseInt(n, 10) || 0).filter(n => n > 0);
+    const pos = [{ x: 7, y: 32 }];                       // GK
+    const nLines = lines.length;
+    for (let li = 0; li < nLines; li++) {
+        const lx = 18 + li * (30 / Math.max(1, nLines - 1));
+        const count = lines[li];
+        for (let pi = 0; pi < count; pi++) {
+            pos.push({ x: lx, y: 9 + (pi + 1) * (46 / (count + 1)) });
+        }
+    }
+    return side === 'away' ? pos.map(p => ({ x: 100 - p.x, y: p.y })) : pos;
+}
+
+function fbPitchSetup(homeFormation, awayFormation, homeColor, awayColor) {
+    const NS = 'http://www.w3.org/2000/svg';
+    const stripes = $('fb-pitch-stripes');
+    if (stripes && !stripes.childNodes.length) {
+        for (let i = 0; i < 7; i++) {
+            const r = document.createElementNS(NS, 'rect');
+            r.setAttribute('x', (3 + i * 13.43).toFixed(2)); r.setAttribute('y', '3');
+            r.setAttribute('width', '13.43'); r.setAttribute('height', '58');
+            stripes.appendChild(r);
+        }
+    }
+    const layer = $('fb-pitch-players');
+    if (!layer) return;
+    layer.innerHTML = '';
+    const home = fbFormationPositions(homeFormation, 'home');
+    const away = fbFormationPositions(awayFormation, 'away');
+    FB._pitch = { hc: homeColor, ac: awayColor, dots: [] };
+    const add = (list, color, cls) => list.forEach(p => {
+        const c = document.createElementNS(NS, 'circle');
+        c.setAttribute('cx', p.x.toFixed(1)); c.setAttribute('cy', p.y.toFixed(1));
+        c.setAttribute('r', '1.7'); c.setAttribute('fill', color);
+        c.setAttribute('stroke', 'rgba(0,0,0,.35)'); c.setAttribute('stroke-width', '0.3');
+        c.setAttribute('class', 'fb-pitch-dot ' + cls);
+        layer.appendChild(c); FB._pitch.dots.push(c);
+    });
+    add(home, homeColor, 'home');
+    add(away, awayColor, 'away');
+    const ball = $('fb-pitch-ball');
+    if (ball) { ball.classList.add('fb-pitch-ball-anim'); ball.setAttribute('cx', '50'); ball.setAttribute('cy', '32'); }
+}
+
+function fbPitchBall(x, y) {
+    const ball = $('fb-pitch-ball');
+    if (ball) { ball.setAttribute('cx', x.toFixed(1)); ball.setAttribute('cy', y.toFixed(1)); }
+}
+
+function fbPitchAmbientStart(possHome) {
+    fbPitchAmbientStop();
+    FB._pitchPoss = (typeof possHome === 'number') ? possHome : 50;
+    FB._pitchTimer = setInterval(() => {
+        const homeHas = Math.random() * 100 < FB._pitchPoss;
+        const x = homeHas ? (45 + Math.random() * 40) : (15 + Math.random() * 40);
+        fbPitchBall(x, 12 + Math.random() * 40);
+    }, 600);
+}
+
+function fbPitchAmbientStop() {
+    if (FB._pitchTimer) { clearInterval(FB._pitchTimer); FB._pitchTimer = null; }
+}
+
+function fbPitchGoal(side) {
+    fbPitchAmbientStop();
+    fbPitchBall(side === 'home' ? 96 : 4, 32);
+    const flash = $('fb-pitch-flash');
+    if (flash) {
+        flash.setAttribute('x', side === 'home' ? '72' : '28');
+        flash.style.transition = 'none'; flash.style.opacity = '1';
+        setTimeout(() => { flash.style.transition = 'opacity .9s ease'; flash.style.opacity = '0'; }, 60);
+    }
+    if (FB._pitch && FB._pitch.dots) {
+        FB._pitch.dots.forEach(d => {
+            if (d.classList.contains(side)) {
+                d.classList.add('goal-pulse');
+                setTimeout(() => d.classList.remove('goal-pulse'), 1600);
+            }
+        });
+    }
+    setTimeout(() => fbPitchBall(50, 32), 900);
+    setTimeout(() => { if (FB._matchTimer) fbPitchAmbientStart(FB._pitchPoss); }, 1200);
 }
 
 function fbAnimateSegment(events, startMin, endMin, initHs, initAs, possTarget, durationMs, onComplete) {
@@ -7974,9 +8103,30 @@ function fbAnimateSegment(events, startMin, endMin, initHs, initAs, possTarget, 
     const evs = events.slice().sort((a, b) => a.minute - b.minute);
     let hs = initHs, as = initAs, ei = 0;
     const possStart = parseInt($('fb-poss-you').textContent, 10) || 50;
-    const startT = performance.now();
+    const cpuName = (FB._matchData && FB._matchData.cpu_name) || 'Rivals';
+    fbPitchAmbientStart(possTarget);
+    if (startMin === 0) fbAddFeedItem({ type: 'kick', minute: 0, text: fbPick(FB_LINES.kick) });
+    let nextAmbient = startMin + 4 + Math.floor(Math.random() * 5);
+    let last = performance.now(), vt = 0;
+    function finish() {
+        fbPitchAmbientStop();
+        while (ei < evs.length) {
+            const ev = evs[ei]; ei++;
+            fbAddFeedItem(ev);
+            if (ev.type === 'goal') { if (ev.team === 'home') hs++; else as++; }
+        }
+        $('fb-score').textContent = hs + '-' + as;
+        $('fb-clock').textContent = endMin + "'";
+        $('fb-poss-fill').style.width = possTarget + '%';
+        $('fb-poss-you').textContent = possTarget + '%';
+        $('fb-poss-cpu').textContent = (100 - possTarget) + '%';
+        FB._matchTimer = null;
+        if (onComplete) onComplete(hs, as);
+    }
     function frame(now) {
-        const t = Math.min(1, (now - startT) / durationMs);
+        if (FB._skip) { FB._skip = false; finish(); return; }
+        vt += (now - last) * (FB._speed || 1); last = now;
+        const t = Math.min(1, vt / durationMs);
         const minute = Math.floor(startMin + (endMin - startMin) * t);
         $('fb-clock').textContent = minute + "'";
         const pv = Math.round(possStart + (possTarget - possStart) * t);
@@ -7989,37 +8139,61 @@ function fbAnimateSegment(events, startMin, endMin, initHs, initAs, possTarget, 
             if (ev.type === 'goal') {
                 if (ev.team === 'home') hs++; else as++;
                 $('fb-score').textContent = hs + '-' + as;
+                fbPitchGoal(ev.team === 'home' ? 'home' : 'away');
                 try { soundClick(); } catch (e) {}
             }
         }
-        if (t < 1) {
-            FB._matchTimer = requestAnimationFrame(frame);
-        } else {
-            FB._matchTimer = null;
-            if (onComplete) onComplete(hs, as);
+        if (minute >= nextAmbient && minute < endMin - 1) {
+            const team = (pv >= 50) ? 'You' : cpuName;
+            fbAddFeedItem({ type: 'ambient', minute: minute, text: fbPick(FB_LINES.ambient).replace('{t}', team) });
+            nextAmbient = minute + 5 + Math.floor(Math.random() * 7);
         }
+        if (t < 1) { FB._matchTimer = requestAnimationFrame(frame); }
+        else { finish(); }
     }
     FB._matchTimer = requestAnimationFrame(frame);
 }
 
+const FB_LINES = {
+    goal: ['GOAL! {p} smashes it home!', '{p} finds the net!', "It's in! {p} makes no mistake.",
+        '{p} buries the chance!', 'Clinical from {p}!', '{p} scores!', 'Top finish from {p}!',
+        'What a strike from {p}!', '{p} slots it away!'],
+    card: ['{p} goes into the book.', 'Yellow card for {p}.', '{p} is booked.', 'The ref shows {p} a yellow.'],
+    sub: ['{in} on for {out}.', 'Change: {in} replaces {out}.', '{in} comes on for {out}.', '{out} makes way for {in}.'],
+    kick: ["We're underway!", 'Kick-off!', "And we're off.", 'The match gets going.'],
+    ambient: ['{t} keeping it tidy at the back.', 'End to end stuff here.', '{t} probing for an opening.',
+        'Good tempo to this one.', '{t} seeing plenty of the ball.', 'A half-chance goes begging!',
+        'Tidy build-up from {t}.', '{t} pressing high up the pitch.', 'Bit of a lull now.',
+        'Patient passing from {t}.', 'Big shout for a penalty waved away!', '{t} stretching the play.']
+};
+function fbPick(a) { return a[Math.floor(Math.random() * a.length)]; }
+
 function fbAddFeedItem(ev) {
     const feed = $('fb-feed');
     const cpuName = (FB._matchData && FB._matchData.cpu_name) || 'Rivals';
+    const who = ev.team === 'home' ? 'You' : cpuName;
     let html = '';
     if (ev.type === 'goal') {
+        const line = fbPick(FB_LINES.goal).replace('{p}', fbEsc(ev.player));
         const asst = ev.assist ? ' <span class="fb-dim">assist ' + fbEsc(ev.assist) + '</span>' : '';
-        const who = ev.team === 'home' ? 'You' : cpuName;
         html = '<div class="fb-feed-item goal"><span class="fb-min">' + ev.minute +
             "'</span><span class=\"fb-ico\">⚽</span><span class=\"fb-txt\">" +
-            fbEsc(ev.player) + asst + ' <span class="fb-dim">· ' + fbEsc(who) + '</span></span></div>';
+            line + asst + ' <span class="fb-dim">· ' + fbEsc(who) + '</span></span></div>';
     } else if (ev.type === 'sub') {
-        const who = ev.team === 'home' ? 'You' : cpuName;
+        const line = fbPick(FB_LINES.sub).replace('{in}', fbEsc(ev.player)).replace('{out}', fbEsc(ev.out));
         html = '<div class="fb-feed-item"><span class="fb-min">' + ev.minute +
             "'</span><span class=\"fb-ico\">⇄</span><span class=\"fb-txt\">" +
-            fbEsc(ev.player) + ' on for ' + fbEsc(ev.out) + ' <span class="fb-dim">· ' + fbEsc(who) + '</span></span></div>';
+            line + ' <span class="fb-dim">· ' + fbEsc(who) + '</span></span></div>';
     } else if (ev.type === 'card') {
+        const line = fbPick(FB_LINES.card).replace('{p}', fbEsc(ev.player));
         html = '<div class="fb-feed-item"><span class="fb-min">' + ev.minute +
-            "'</span><span class=\"fb-ico\">🟨</span><span class=\"fb-txt\">" + fbEsc(ev.player) + '</span></div>';
+            "'</span><span class=\"fb-ico\">🟨</span><span class=\"fb-txt\">" + line + '</span></div>';
+    } else if (ev.type === 'kick') {
+        html = '<div class="fb-feed-item"><span class="fb-min">' + (ev.minute || 0) +
+            "'</span><span class=\"fb-ico\">▶</span><span class=\"fb-txt\">" + fbEsc(ev.text) + '</span></div>';
+    } else if (ev.type === 'ambient') {
+        html = '<div class="fb-feed-item ambient"><span class="fb-min">' + ev.minute +
+            "'</span><span class=\"fb-ico\">·</span><span class=\"fb-txt fb-dim\">" + fbEsc(ev.text) + '</span></div>';
     } else if (ev.type === 'ht') {
         html = '<div class="fb-feed-divider">Half-time · ' + ev.home_score + '-' + ev.away_score + '</div>';
     } else {
@@ -8118,7 +8292,7 @@ async function fbSecondHalf() {
         const htHs = FB._matchData.result.home_score;
         const htAs = FB._matchData.result.away_score;
         const possYou = d.result.stats.possession_home;
-        fbAnimateSegment(d.result.events, 45, 90, htHs, htAs, possYou, 5000, () => fbShowFullTime(d));
+        fbAnimateSegment(d.result.events, 45, 90, htHs, htAs, possYou, 32000, () => fbShowFullTime(d));
     } catch (e) {
         toast('Second half failed to start');
     }
@@ -8190,8 +8364,12 @@ function fbShowFullTime(d) {
         $('fb-ft-reward').textContent = reward;
         playBtn.textContent = 'Play again';
         playBtn.onclick = () => { try { soundClick(); } catch (e) {} footballShowIntro(); };
-        if (d.league_you && d.league_you.pos) {
-            lg.textContent = "You're " + fbOrdinal(d.league_you.pos) + " in the global league";
+        if (d.league_you && d.league_you.rating) {
+            const ly = d.league_you;
+            const dl = (typeof ly.last_delta === 'number')
+                ? (ly.last_delta >= 0 ? ' +' + ly.last_delta : ' ' + ly.last_delta) : '';
+            lg.textContent = 'Manager Rating ' + ly.rating + dl + ' \u00b7 ' + ly.tier
+                + ' \u00b7 ' + fbOrdinal(ly.pos) + ' global';
             lg.classList.remove('hidden');
         } else {
             lg.classList.add('hidden');
@@ -8226,6 +8404,24 @@ function fbOrdinal(n) {
     return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
+function fbFormHtml(form) {
+    if (!form || !form.length) return '<span class="fb-lg-form"><span class="fb-fm none">\u2013</span></span>';
+    return '<span class="fb-lg-form">' + form.map(o => {
+        const cls = o === 'W' ? 'w' : (o === 'D' ? 'd' : 'l');
+        return '<span class="fb-fm ' + cls + '">' + o + '</span>';
+    }).join('') + '</span>';
+}
+
+function fbLeagueRowHtml(row, isYou) {
+    const rec = (row.W || 0) + 'W ' + (row.D || 0) + 'D ' + (row.L || 0) + 'L';
+    return '<span class="fb-lg-pos">' + row.pos + '</span>' +
+        '<span class="fb-lg-name">' + fbEsc(row.name) +
+        (isYou ? ' <span class="fb-lg-tag">you</span>' : '') +
+        '<span class="fb-lg-sub">' + fbEsc(row.tier || '') + ' \u00b7 ' + rec + '</span></span>' +
+        fbFormHtml(row.form) +
+        '<span class="fb-lg-rating">' + row.rating + '</span>';
+}
+
 async function fbShowLeague(fromScreen) {
     FB.leagueReturn = fromScreen || 'screen-football-setup';
     showScreen('screen-football-league');
@@ -8237,25 +8433,19 @@ async function fbShowLeague(fromScreen) {
         const r = await fetch('/api/football/league?user_id=' + encodeURIComponent(uid));
         const d = await r.json();
         rows.innerHTML = '';
-        d.table.forEach(row => {
+        if (!d.table || !d.table.length) {
+            rows.innerHTML = '<div class="muted small center" style="padding:18px 0;">No managers have entered yet. Play a ranked match to be the first on the board.</div>';
+        }
+        (d.table || []).forEach(row => {
             const isYou = row.uid === uid;
             const el = document.createElement('div');
             el.className = 'fb-league-row' + (isYou ? ' you' : '');
-            el.innerHTML = '<span class="fb-lg-pos">' + row.pos + '</span>' +
-                '<span class="fb-lg-name">' + fbEsc(row.name) +
-                (isYou ? ' <span class="fb-lg-tag">you</span>' : '') + '</span>' +
-                '<span>' + row.P + '</span><span>' + row.W + '</span>' +
-                '<span>' + row.D + '</span><span>' + row.L + '</span>' +
-                '<span class="fb-lg-pts">' + row.Pts + '</span>';
+            el.innerHTML = fbLeagueRowHtml(row, isYou);
             rows.appendChild(el);
         });
         const youEl = $('fb-league-you');
-        if (d.you && d.you.pos > d.table.length) {
-            youEl.innerHTML = '<span class="fb-lg-pos">' + d.you.pos + '</span>' +
-                '<span class="fb-lg-name">' + fbEsc(d.you.name) + ' <span class="fb-lg-tag">you</span></span>' +
-                '<span>' + d.you.P + '</span><span>' + d.you.W + '</span>' +
-                '<span>' + d.you.D + '</span><span>' + d.you.L + '</span>' +
-                '<span class="fb-lg-pts">' + d.you.Pts + '</span>';
+        if (d.you && d.you.pos > (d.table || []).length) {
+            youEl.innerHTML = fbLeagueRowHtml(d.you, true);
             youEl.classList.remove('hidden');
         }
     } catch (e) {
@@ -8293,6 +8483,9 @@ function renderFbMpDraft(s) {
     FB._inMp = true;
     const f = s.football_mp || {};
     const mySid = (s.me && s.me.sid) || State.mySid;
+    FB._mpMode = f.mode || 'faceoff';
+    FB._mpPlayers = (f.sids || Object.keys(f.names || {})).length;
+    FB._mpReadyCount = Object.values(f.ready || {}).filter(Boolean).length;
     FB._mpSide = (f.home_sid === mySid) ? 'home' : 'away';
     const oppSid = (FB._mpSide === 'home') ? f.away_sid : f.home_sid;
     FB._mpOppName = (f.names && f.names[oppSid]) || 'Opponent';
@@ -8345,9 +8538,49 @@ function renderFbMpMatch(s) {
     if (FB._mpResultShown && FB._mpLastResultId === res.result_id) return;
     FB._mpResultShown = true;
     FB._mpLastResultId = res.result_id;
+    if (res.mode === 'group') { renderFbGroupResult(res, s); return; }
     const mySid = (s.me && s.me.sid) || State.mySid;
     const mySide = (res.home_sid === mySid) ? 'home' : 'away';
     fbMpReplay(res, mySide);
+}
+
+function renderFbGroupResult(res, s) {
+    const mySid = (s.me && s.me.sid) || State.mySid;
+    const rows = $('fb-group-rows');
+    rows.innerHTML = '';
+    (res.table || []).forEach(r => {
+        const isYou = r.sid === mySid;
+        const el = document.createElement('div');
+        el.className = 'fb-grp-row' + (isYou ? ' you' : '');
+        const dl = (typeof r.delta === 'number') ? (r.delta >= 0 ? '+' + r.delta : '' + r.delta) : '';
+        const sub = (r.rating != null) ? (fbEsc(r.tier || '') + ' \u00b7 ' + r.rating + ' (' + dl + ')') : '';
+        el.innerHTML = '<span class="fb-lg-pos">' + r.pos + '</span>' +
+            '<span class="fb-lg-name">' + fbEsc(r.name) +
+            (isYou ? ' <span class="fb-lg-tag">you</span>' : '') +
+            (sub ? '<span class="fb-lg-sub">' + sub + '</span>' : '') + '</span>' +
+            '<span>' + r.P + '</span><span>' + r.W + '</span>' +
+            '<span>' + r.D + '</span><span>' + r.L + '</span>' +
+            '<span class="fb-grp-pts">' + r.Pts + '</span>';
+        rows.appendChild(el);
+    });
+    const you = (res.table || []).find(r => r.sid === mySid);
+    const rw = $('fb-group-reward');
+    if (you) {
+        const dl = (typeof you.delta === 'number') ? (you.delta >= 0 ? ' +' + you.delta : ' ' + you.delta) : '';
+        const head = (you.pos === 1) ? 'You won the mini-league!' : 'You finished ' + fbOrdinal(you.pos);
+        rw.textContent = head + (you.rating != null ? ' \u00b7 Manager Rating ' + you.rating + dl : '');
+        if (you.pos === 1) { try { triggerConfetti(); } catch (e) {} try { soundWin(); } catch (e) {} }
+        else { try { soundClick(); } catch (e) {} }
+    } else {
+        rw.textContent = '';
+    }
+    $('fb-group-sub').textContent = (res.matches || []).length + ' matches played';
+    $('fb-group-rematch').onclick = () => { try { soundClick(); } catch (e) {} socket.emit('football_rematch'); };
+    $('fb-group-home').onclick = () => {
+        try { soundClick(); } catch (e) {}
+        FB._inMp = false; leaveCurrentRoomIfAny(); showScreen('screen-home');
+    };
+    showScreen('screen-football-group');
 }
 
 function fbMpReplay(res, mySide) {
@@ -8362,6 +8595,10 @@ function fbMpReplay(res, mySide) {
     $('fb-cpu-name').textContent = oppName;
     const yc = $('fb-you-crest'); if (yc) yc.textContent = fbInitials(myName);
     const cc = $('fb-cpu-crest'); if (cc) cc.textContent = fbInitials(oppName);
+    const myVal = (mySide === 'home') ? res.home_value : res.away_value;
+    const oppVal = (mySide === 'home') ? res.away_value : res.home_value;
+    const _yv2 = $('fb-you-val'); if (_yv2) _yv2.textContent = (typeof myVal === 'number') ? '\u00a3' + myVal.toFixed(1) + 'm' : '';
+    const _cv2 = $('fb-cpu-val'); if (_cv2) _cv2.textContent = (typeof oppVal === 'number') ? '\u00a3' + oppVal.toFixed(1) + 'm' : '';
     $('fb-score').textContent = '0-0';
     $('fb-clock').textContent = "0'";
     $('fb-feed').innerHTML = '';
@@ -8371,7 +8608,9 @@ function fbMpReplay(res, mySide) {
     $('fb-poss-you').textContent = '50%';
     $('fb-poss-cpu').textContent = '50%';
     showScreen('screen-football-match');
-    fbAnimateSegment(evs, 0, 90, 0, 0, myPoss, 7000, () => fbMpShowResult());
+    FB._skip = false;
+    fbPitchSetup(FB.formation || '4-3-3', '4-3-3', '#2563eb', '#ef4444');
+    fbAnimateSegment(evs, 0, 90, 0, 0, myPoss, 60000, () => fbMpShowResult());
 }
 
 function fbMpShowResult() {
@@ -8395,8 +8634,15 @@ function fbMpShowResult() {
     }
     out.className = 'fb-ft-outcome ' + cls;
     out.textContent = label;
-    $('fb-ft-reward').textContent = reward;
-    const poss = (mySide === 'home') ? res.stats.possession_home : res.stats.possession_away;
+    const myRating = (mySide === 'home') ? res.home_rating : res.away_rating;
+    const myDelta = (mySide === 'home') ? res.home_delta : res.away_delta;
+    const myTier = (mySide === 'home') ? res.home_tier : res.away_tier;
+    if (typeof myRating === 'number') {
+        const dl = (typeof myDelta === 'number') ? (myDelta >= 0 ? ' +' + myDelta : ' ' + myDelta) : '';
+        $('fb-ft-reward').textContent = 'Manager Rating ' + myRating + dl + (myTier ? ' \u00b7 ' + myTier : '');
+    } else {
+        $('fb-ft-reward').textContent = reward;
+    }
     const shots = (mySide === 'home') ? res.stats.shots_home : res.stats.shots_away;
     const sot = (mySide === 'home') ? res.stats.sot_home : res.stats.sot_away;
     $('fb-ft-stats').innerHTML =
@@ -8445,8 +8691,18 @@ function wireFootball() {
     if (sheet) sheet.onclick = e => { if (e.target === sheet) sheet.classList.add('hidden'); };
     const again = $('fb-playagain');
     if (again) again.onclick = () => { try { soundClick(); } catch (e) {} footballShowIntro(); };
-    const viewLeague = $('fb-view-league');
-    if (viewLeague) viewLeague.onclick = () => { try { soundClick(); } catch (e) {} fbShowLeague('screen-football-setup'); };
+    const tabLeague = $('fb-tab-league');
+    if (tabLeague) tabLeague.onclick = () => { try { soundClick(); } catch (e) {} fbShowLeague('screen-football-setup'); };
+    const tabPlay = $('fb-tab-play');
+    if (tabPlay) tabPlay.onclick = () => { try { soundClick(); } catch (e) {} showScreen('screen-football-setup'); };
+    const skipBtn = $('fb-skip');
+    if (skipBtn) skipBtn.onclick = () => { try { soundClick(); } catch (e) {} FB._skip = true; };
+    const speedBtn = $('fb-speed');
+    if (speedBtn) speedBtn.onclick = () => {
+        try { soundClick(); } catch (e) {}
+        FB._speed = (FB._speed === 2) ? 1 : 2;
+        speedBtn.innerHTML = (FB._speed === 2) ? '2&times;' : '1&times;';
+    };
     const ftLeague = $('fb-ft-league');
     if (ftLeague) ftLeague.onclick = () => { try { soundClick(); } catch (e) {} fbShowLeague('screen-football-match'); };
     const leagueBack = $('fb-league-back');

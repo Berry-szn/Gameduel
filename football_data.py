@@ -21,6 +21,7 @@ can be unit-tested in isolation.
 """
 
 import hashlib
+import re
 
 # (name, short, position, overall_rating, club)
 _RAW = [
@@ -138,8 +139,9 @@ _RAW = [
 
 POSITIONS = ("GK", "DEF", "MID", "FWD")
 
-# Attacking forwards cost the most per rating point; keepers/defenders least.
-_POS_PRICE_MULT = {"FWD": 1.00, "MID": 0.90, "DEF": 0.70, "GK": 0.60}
+# FPL-standard pricing: £4.0m floor, £14.0m ceiling, 0.1m increments.
+# Convex in rating so stars cost far more and the £100m cap forces trade-offs.
+_POS_PRICE_MULT = {"FWD": 1.06, "MID": 1.00, "DEF": 0.86, "GK": 0.80}
 
 
 def _unit_noise(name, key):
@@ -148,16 +150,20 @@ def _unit_noise(name, key):
     return (h % 100000) / 100000.0 - 0.5
 
 
+def _fpl_round(price):
+    price = max(4.0, min(14.0, float(price)))
+    return round(price * 10) / 10.0              # nearest 0.1 (FPL style)
+
+
 def _derive_price(name, pos, rating):
-    # Convex in rating: a 91 costs far more than an 84, so a $200m budget
-    # cannot field a superstar at every position — you must make trade-offs.
-    d = rating - 70                              # 0..21
-    base = 4.0 + 0.30 * d + 0.035 * d * d        # 70->4.0, 80->10.5, 87->19.2, 91->25.7
-    mult = _POS_PRICE_MULT[pos]
-    value_noise = 1.0 + _unit_noise(name, "price") * 0.14   # +/- 7% (bargains/traps)
-    price = base * mult * value_noise
-    price = max(4.0, price)
-    return round(price * 2) / 2.0              # nearest 0.5
+    # Gentle convex curve so an all-elite built-in pool still fits a £100m
+    # squad: 70->4.0, 80->~5.5, 85->~6.6, 90->~8.4, 94->~9.7, 99->~12.0.
+    # Stars are dear enough to force trade-offs but a balanced XV fits budget.
+    d = max(0, rating - 70)                       # 0..~29
+    base = 4.0 + 0.10 * d + 0.006 * d * d
+    mult = _POS_PRICE_MULT.get(pos, 1.0)
+    value_noise = 1.0 + _unit_noise(name, "price") * 0.10   # +/- 5% bargains/traps
+    return _fpl_round(base * mult * value_noise)
 
 
 def _clamp(x):
@@ -187,38 +193,103 @@ def _derive_attrs(name, pos, rating):
             "gk": 20}
 
 
-def _build():
-    out = []
-    seen = set()
+def _norm_positions(pos):
+    """'MID' | 'MID/FWD' | 'MID,FWD' | ['MID','FWD'] -> (primary, [all valid])."""
+    if isinstance(pos, (list, tuple)):
+        parts = [str(x).strip().upper() for x in pos if str(x).strip()]
+    else:
+        parts = [x.strip().upper() for x in re.split(r"[/,|]", str(pos)) if x.strip()]
+    parts = [p for p in parts if p in POSITIONS]
+    if not parts:
+        parts = ["MID"]
+    # de-dupe, keep order
+    seen, out = set(), []
+    for p in parts:
+        if p not in seen:
+            seen.add(p); out.append(p)
+    return out[0], out
+
+
+def player_from_fields(name, short=None, pos="MID", rating=75, club="",
+                       country="", age=0, price=None):
+    """Build one normalized player dict. Used for both the built-in list and
+    admin CSV uploads. If price is None/blank it is derived (FPL scale)."""
+    name = str(name or "").strip()
+    short = (str(short).strip() if short else "") or name
+    primary, all_pos = _norm_positions(pos)
+    try:
+        rating = int(round(float(rating)))
+    except Exception:
+        rating = 75
+    rating = max(40, min(99, rating))
+    try:
+        age = int(age) if str(age).strip() not in ("", "None") else 0
+    except Exception:
+        age = 0
+    if price in (None, "") or str(price).strip() == "":
+        price = _derive_price(name, primary, rating)
+    else:
+        try:
+            price = _fpl_round(float(price))
+        except Exception:
+            price = _derive_price(name, primary, rating)
+    return {
+        "id": "p_" + hashlib.md5(name.encode("utf-8")).hexdigest()[:10],
+        "name": name,
+        "short": short,
+        "pos": primary,
+        "positions": all_pos,
+        "rating": rating,
+        "club": str(club or "").strip(),
+        "country": str(country or "").strip(),
+        "age": age,
+        "price": price,
+        "attrs": _derive_attrs(name, primary, rating),
+    }
+
+
+def _build_builtin():
+    out, seen = [], set()
     for (name, short, pos, rating, club) in _RAW:
-        assert pos in POSITIONS, f"bad pos for {name}"
-        assert name not in seen, f"duplicate player {name}"
+        if name in seen:
+            continue
         seen.add(name)
-        out.append({
-            "id": "p_" + hashlib.md5(name.encode("utf-8")).hexdigest()[:10],
-            "name": name,
-            "short": short,
-            "pos": pos,
-            "rating": rating,
-            "club": club,
-            "price": _derive_price(name, pos, rating),
-            "attrs": _derive_attrs(name, pos, rating),
-        })
+        out.append(player_from_fields(name, short, pos, rating, club))
     return out
 
 
-PLAYERS = _build()
-PLAYERS_BY_ID = {p["id"]: p for p in PLAYERS}
-PLAYERS_BY_NAME = {p["name"]: p for p in PLAYERS}
+# ---- Active player pool (swappable) ----
+# Admin CSV upload replaces this set; with nothing uploaded it is the built-in
+# list above. Other modules read via the accessors, so reassigning updates all.
+_active = []
+PLAYERS = []
+PLAYERS_BY_ID = {}
+PLAYERS_BY_NAME = {}
+
+
+def set_players(rows):
+    """Replace the active player pool with a list of normalized player dicts."""
+    global _active, PLAYERS, PLAYERS_BY_ID, PLAYERS_BY_NAME
+    _active = list(rows or [])
+    PLAYERS = _active
+    PLAYERS_BY_ID = {p["id"]: p for p in _active}
+    PLAYERS_BY_NAME = {p["name"]: p for p in _active}
+
+
+def reset_to_builtin():
+    set_players(_build_builtin())
+
+
+reset_to_builtin()   # initialize
 
 
 def get_pool():
-    """All players (list of dicts). Treat as read-only."""
-    return PLAYERS
+    """All active players (list of dicts). Treat as read-only."""
+    return _active
 
 
 def by_position(pos):
-    return [p for p in PLAYERS if p["pos"] == pos]
+    return [p for p in _active if p["pos"] == pos]
 
 
 def get_player(pid):
@@ -227,7 +298,11 @@ def get_player(pid):
 
 def position_counts():
     from collections import Counter
-    return dict(Counter(p["pos"] for p in PLAYERS))
+    return dict(Counter(p["pos"] for p in _active))
+
+
+def builtin_count():
+    return len(_RAW)
 
 
 if __name__ == "__main__":

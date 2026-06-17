@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#ffffff">
     <title>GameRoom</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=39">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=40">
     <!-- Google Identity Services (Sign in with Google). Loaded async; the
          client wires it up once /api/public/config returns the client id. -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -438,6 +438,11 @@
                     <button class="seg-btn active" data-georounds="5">5</button>
                     <button class="seg-btn" data-georounds="10">10</button>
                 </div>
+            </div>
+
+            <div class="card hidden" id="lobby-football-card">
+                <h1>Team Manager</h1>
+                <p class="muted" id="lobby-football-blurb">Draft a squad, then play.</p>
             </div>
 
             <div class="card">
@@ -1533,6 +1538,10 @@
     <section id="screen-football-setup" class="screen">
         <div class="card">
             <button class="back-link" data-back="screen-home">&larr; Back</button>
+            <div class="fb-tabs">
+                <button class="fb-tab active" data-fbtab="play">Play</button>
+                <button class="fb-tab" data-fbtab="league" id="fb-tab-league">Global League</button>
+            </div>
             <div class="muted small center">Team Manager</div>
             <h1 class="center">Build your team</h1>
             <p class="muted">Draft a squad on a budget, pick your shape and tactics, then take on the computer. Team selection and tactics decide the result, not luck.</p>
@@ -1558,7 +1567,6 @@
 
             <button id="fb-draft-btn" class="btn btn-primary btn-block">Quick match</button>
             <button id="fb-cup-btn" class="btn btn-secondary btn-block">Cup run (knockout)</button>
-            <button id="fb-view-league" class="btn btn-secondary btn-block">View global league</button>
         </div>
     </section>
 
@@ -1599,6 +1607,7 @@
                 <div class="fb-team">
                     <div class="fb-crest fb-crest-you" id="fb-you-crest">YOU</div>
                     <div class="small" id="fb-you-name">Your XI</div>
+                    <div class="fb-team-val" id="fb-you-val"></div>
                 </div>
                 <div class="fb-score-mid">
                     <div class="fb-score" id="fb-score">0-0</div>
@@ -1607,6 +1616,39 @@
                 <div class="fb-team">
                     <div class="fb-crest fb-crest-cpu" id="fb-cpu-crest">CPU</div>
                     <div class="small" id="fb-cpu-name">Rivals</div>
+                    <div class="fb-team-val" id="fb-cpu-val"></div>
+                </div>
+            </div>
+
+            <div class="fb-pitch-wrap">
+                <svg id="fb-pitch" viewBox="0 0 100 64" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+                    <defs>
+                        <linearGradient id="fb-turf" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0" stop-color="#2f9e51"/>
+                            <stop offset="1" stop-color="#268043"/>
+                        </linearGradient>
+                    </defs>
+                    <rect x="0" y="0" width="100" height="64" fill="url(#fb-turf)"/>
+                    <g id="fb-pitch-stripes"></g>
+                    <g stroke="rgba(255,255,255,.7)" stroke-width="0.4" fill="none">
+                        <rect x="3" y="3" width="94" height="58" rx="0.5"/>
+                        <line x1="50" y1="3" x2="50" y2="61"/>
+                        <circle cx="50" cy="32" r="8"/>
+                        <circle cx="50" cy="32" r="0.8" fill="rgba(255,255,255,.7)"/>
+                        <rect x="3" y="17" width="13" height="30"/>
+                        <rect x="84" y="17" width="13" height="30"/>
+                        <rect x="3" y="25" width="5" height="14"/>
+                        <rect x="92" y="25" width="5" height="14"/>
+                    </g>
+                    <rect x="1.4" y="27" width="1.6" height="10" fill="rgba(255,255,255,.85)"/>
+                    <rect x="97" y="27" width="1.6" height="10" fill="rgba(255,255,255,.85)"/>
+                    <g id="fb-pitch-players"></g>
+                    <circle id="fb-pitch-ball" cx="50" cy="32" r="1.5" fill="#fff" stroke="#111" stroke-width="0.3"/>
+                    <text id="fb-pitch-flash" x="50" y="35" text-anchor="middle" font-size="11" font-weight="900" fill="#fff" opacity="0" style="paint-order:stroke;stroke:#111;stroke-width:0.6px;">GOAL!</text>
+                </svg>
+                <div class="fb-pitch-controls">
+                    <button id="fb-speed" class="fb-pitch-btn">1&times;</button>
+                    <button id="fb-skip" class="fb-pitch-btn">Skip &raquo;</button>
                 </div>
             </div>
 
@@ -1653,16 +1695,37 @@
     <section id="screen-football-league" class="screen">
         <div class="card">
             <button class="back-link" id="fb-league-back">&larr; Back</button>
+            <div class="fb-tabs">
+                <button class="fb-tab" data-fbtab="play" id="fb-tab-play">Play</button>
+                <button class="fb-tab active" data-fbtab="league">Global League</button>
+            </div>
             <h1 class="center">Global league</h1>
-            <p class="muted small center">Every ranked match counts. The table never resets.</p>
+            <p class="muted small center">Manager Rating, not games played, decides your rank. Beat tougher managers to climb.</p>
             <div class="fb-league-head">
                 <span class="fb-lg-pos">#</span>
                 <span class="fb-lg-name">Manager</span>
-                <span>P</span><span>W</span><span>D</span><span>L</span>
-                <span class="fb-lg-pts">Pts</span>
+                <span class="fb-lg-form">Form</span>
+                <span class="fb-lg-rating">Rating</span>
             </div>
             <div id="fb-league-rows"></div>
             <div id="fb-league-you" class="fb-league-row you fb-league-you hidden"></div>
+        </div>
+    </section>
+
+    <section id="screen-football-group" class="screen">
+        <div class="card">
+            <h1 class="center">Mini-league result</h1>
+            <p class="muted small center" id="fb-group-sub">Final table</p>
+            <div class="fb-grp-head">
+                <span class="fb-lg-pos">#</span>
+                <span class="fb-lg-name">Manager</span>
+                <span>P</span><span>W</span><span>D</span><span>L</span>
+                <span class="fb-grp-pts">Pts</span>
+            </div>
+            <div id="fb-group-rows"></div>
+            <div id="fb-group-reward" class="fb-cup-banner" style="margin-top:12px;"></div>
+            <button id="fb-group-rematch" class="btn btn-primary btn-block" style="margin-top:12px;">Rematch</button>
+            <button id="fb-group-home" class="btn btn-secondary btn-block">Leave</button>
         </div>
     </section>
 
@@ -2030,6 +2093,6 @@
         window.INITIAL_MATCH_CODE = "{{ match_code or '' }}";
     </script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="{{ url_for('static', filename='app.js') }}?v=39"></script>
+    <script src="{{ url_for('static', filename='app.js') }}?v=40"></script>
 </body>
 </html>

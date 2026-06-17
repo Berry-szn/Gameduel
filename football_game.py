@@ -11,7 +11,7 @@ Pure functions over the player pool in football_data.py — unit-testable.
 import random
 import football_data as fd
 
-BUDGET = 200.0          # $m total squad budget
+BUDGET = 100.0          # £m total squad budget (FPL standard)
 BENCH = {"GK": 1, "DEF": 1, "MID": 1, "FWD": 1}   # 4 subs, one per line
 
 # Starting-XI shape per formation (outfield + 1 GK = 11).
@@ -297,15 +297,42 @@ def validate_starting_xi(starting, formation):
 # players). A budget-bound human squad sits around the "medium" band, so easy is
 # winnable, medium is a real contest, and hard demands a good squad + tactics.
 CPU_META = {
-    "easy":   {"name": "Sunday League XI", "tier": 13, "tactic": "balanced",  "formation": "4-4-2"},
-    "medium": {"name": "City Rivals",       "tier": 7,  "tactic": "balanced",  "formation": "4-3-3"},
-    "hard":   {"name": "The Galácticos",    "tier": 1,  "tactic": "press",     "formation": "4-3-3"},
+    "easy":   {"name": "Sunday League XI", "tier": 19, "tactic": "balanced",  "formation": "4-4-2", "budget": 70.0},
+    "medium": {"name": "City Rivals",       "tier": 9,  "tactic": "balanced",  "formation": "4-3-3", "budget": 90.0},
+    "hard":   {"name": "The Galácticos",    "tier": 1,  "tactic": "press",     "formation": "4-3-3", "budget": 100.0},
 }
+
+
+def _cpu_fit_budget(squad, budget=BUDGET):
+    """Swap the priciest players for the best cheaper same-position alternative
+    until the squad fits the budget — so the CPU plays under the same £100m cap
+    as the human. Easy squads are already under and untouched."""
+    ids = set(_all_ids(squad))
+    def cost():
+        return round(sum(fd.get_player(pid)["price"] for pid in _all_ids(squad)), 1)
+    guard = 0
+    while cost() > budget + 1e-9 and guard < 300:
+        guard += 1
+        slots = ([("starting", i, pid) for i, pid in enumerate(squad["starting"])] +
+                 [("bench", i, pid) for i, pid in enumerate(squad["bench"])])
+        slots.sort(key=lambda t: -fd.get_player(t[2])["price"])
+        slot, idx, pid = slots[0]
+        cur = fd.get_player(pid)
+        cands = [p for p in fd.by_position(cur["pos"])
+                 if p["id"] not in ids and p["price"] < cur["price"]]
+        if not cands:
+            break
+        cands.sort(key=lambda p: -p["rating"])   # keep the best rating among cheaper options
+        repl = cands[0]
+        ids.discard(pid); ids.add(repl["id"])
+        squad[slot][idx] = repl["id"]
+    return squad
 
 
 def build_cpu_squad(level="medium", seed=None):
     """A computer squad at the given difficulty. Picks players from a quality
-    band (with small per-game variety) so the CPU differs match to match."""
+    band (with small per-game variety) so the CPU differs match to match, then
+    trims to fit the £100m budget so it never outspends the human."""
     meta = CPU_META.get(level, CPU_META["medium"])
     formation = meta["formation"]
     rng = random.Random(seed)
@@ -322,8 +349,10 @@ def build_cpu_squad(level="medium", seed=None):
         chosen = sorted(chosen, key=lambda p: -p["rating"])
         starting += [p["id"] for p in chosen[:f[pos]]]
         bench += [p["id"] for p in chosen[f[pos]:]]
-    return {"formation": formation, "starting": starting, "bench": bench,
-            "name": meta["name"], "tactic": meta["tactic"]}
+    squad = {"formation": formation, "starting": starting, "bench": bench,
+             "name": meta["name"], "tactic": meta["tactic"]}
+    _cpu_fit_budget(squad, budget=meta.get("budget", BUDGET))
+    return squad
 
 
 if __name__ == "__main__":

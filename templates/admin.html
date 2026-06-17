@@ -115,6 +115,7 @@
       <div class="tab active" data-tab="trivia">Trivia<span class="count" id="c-trivia"></span></div>
       <div class="tab" data-tab="pictionary">Pictionary<span class="count" id="c-pictionary"></span></div>
       <div class="tab" data-tab="footy">FootyMind<span class="count" id="c-footy"></span></div>
+      <div class="tab" data-tab="fbsquad">FB Manager</div>
       <div class="tab" data-tab="geo">Geography<span class="count" id="c-geo"></span></div>
       <div class="tab" data-tab="bulk">Bulk add</div>
       <div class="tab" data-tab="players">Players</div>
@@ -254,6 +255,25 @@
       <div class="card">
         <h2>Your added players (<span id="fo-list-count">0</span>)</h2>
         <div id="fo-list"></div>
+      </div>
+    </section>
+
+    <!-- FOOTBALL MANAGER (squad pool) -->
+    <section class="tabpane hidden" data-pane="fbsquad">
+      <div class="card">
+        <h2>Football Manager players</h2>
+        <p class="hint">The squad pool players draft from in Team Manager. Upload a CSV to replace the built-in list with your own. FPL-standard pricing: &pound;100m squad budget, prices &pound;4.0&ndash;&pound;14.0m.</p>
+        <p class="hint">Columns: <code>name, short_name, club, country, positions, rating, price, age</code>. Positions can be multiple, e.g. <code>MID/FWD</code>. Leave <code>price</code> blank to auto-derive from rating. You need at least 2 GK, 6 DEF, 6 MID, 4 FWD.</p>
+        <div id="fbsquad-status" class="msg"></div>
+        <a class="btn btn-ghost" href="/api/admin/football/players/template">Download CSV template</a>
+        <br><br>
+        <label>Upload players CSV</label>
+        <input type="file" id="fbsquad-file" accept=".csv,text/csv">
+        <div class="row" style="margin-top:10px;">
+          <button class="btn btn-primary" id="fbsquad-upload">Upload &amp; replace pool</button>
+          <button class="btn btn-danger" id="fbsquad-reset">Reset to built-in</button>
+        </div>
+        <div id="fbsquad-msg" class="msg"></div>
       </div>
     </section>
 
@@ -516,8 +536,43 @@ function renderList(containerId, countId, items, fmt, kind){
 }
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
 
+// ---------- football manager players (squad pool CSV) ----------
+async function fbSquadStatus(){
+  try{
+    const {data} = await api('/api/admin/football/players');
+    if(data && data.ok){
+      const bp = data.by_position || {};
+      $('fbsquad-status').className = 'msg ok';
+      $('fbsquad-status').textContent =
+        `${data.count} players in pool (${data.source}) \u2014 GK ${bp.GK||0}, DEF ${bp.DEF||0}, MID ${bp.MID||0}, FWD ${bp.FWD||0}`;
+    }
+  }catch(e){}
+}
+if($('fbsquad-upload')){
+  $('fbsquad-upload').onclick = async ()=>{
+    const f = $('fbsquad-file').files[0];
+    if(!f){ flash($('fbsquad-msg'),'Choose a CSV file first',false); return; }
+    let text='';
+    try{ text = await f.text(); }catch(e){ flash($('fbsquad-msg'),'Could not read file',false); return; }
+    const {status,data} = await api('/api/admin/football/players',{method:'POST',body:JSON.stringify({csv:text})});
+    if(status===200 && data.ok){
+      flash($('fbsquad-msg'), `Uploaded ${data.count} players \u2014 now live`, true);
+      fbSquadStatus();
+    } else {
+      flash($('fbsquad-msg'), data.error || 'Upload failed', false);
+    }
+  };
+  $('fbsquad-reset').onclick = async ()=>{
+    if(!confirm('Reset the squad pool to the built-in player list?')) return;
+    const {status,data} = await api('/api/admin/football/players/reset',{method:'POST'});
+    if(status===200 && data.ok){ flash($('fbsquad-msg'),'Reset to built-in',true); fbSquadStatus(); }
+    else { flash($('fbsquad-msg'), (data&&data.error)||'Reset failed', false); }
+  };
+}
+
 // ---------- load everything ----------
 async function loadAll(){
+  fbSquadStatus();
   const kinds = ['trivia','pictionary','footy','geo_flag','geo_landmark'];
   const results = {};
   for(const k of kinds){

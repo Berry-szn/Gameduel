@@ -2469,29 +2469,38 @@ def on_start_game(data):
             broadcast_state(state, code)
             return
 
-        # Football manager 1v1 dispatch
+        # Football manager dispatch (faceoff 1v1 or group mini-league)
         if state.get('game_type') == 'football':
             humans = [p for p in state['players'].values() if not p.get('is_bot')]
             if len(humans) < 2:
-                emit('error_msg', {'msg': 'Football 1v1 needs two players'})
+                emit('error_msg', {'msg': 'Football needs at least two players'})
                 return
-            home_p, away_p = humans[0], humans[1]   # join order: creator is home
+            fb_mode = 'group' if state.get('mode_hint') == 'group' else 'faceoff'
+            if fb_mode == 'faceoff':
+                humans = humans[:2]              # 1v1 only
+            else:
+                humans = humans[:8]              # cap the mini-league
+            sids = [p['sid'] for p in humans]
+            names, uids = {}, {}
             with SID_TO_USER_LOCK:
-                home_u = dict(SID_TO_USER.get(home_p['sid']) or {})
-                away_u = dict(SID_TO_USER.get(away_p['sid']) or {})
+                for p in humans:
+                    names[p['sid']] = p['name']
+                    uids[p['sid']] = dict(SID_TO_USER.get(p['sid']) or {}).get('user_id')
             state['football_mp'] = {
                 'phase': 'draft',
+                'mode': fb_mode,
                 'budget': _fbgame.BUDGET,
-                'home_sid': home_p['sid'],
-                'away_sid': away_p['sid'],
-                'names': {home_p['sid']: home_p['name'], away_p['sid']: away_p['name']},
-                'uids': {home_p['sid']: home_u.get('user_id'), away_p['sid']: away_u.get('user_id')},
+                'sids': sids,
+                'home_sid': sids[0],
+                'away_sid': sids[1] if len(sids) > 1 else sids[0],
+                'names': names,
+                'uids': uids,
                 'submissions': {},
                 'result': None,
             }
-            state['host_sid'] = home_p['sid']
+            state['host_sid'] = sids[0]
             state['phase'] = 'fb_draft'
-            state['last_start_args'] = {'game_type': 'football', 'mode': 'faceoff'}
+            state['last_start_args'] = {'game_type': 'football', 'mode': fb_mode}
             touch_room(room)
             broadcast_state(state, code)
             return
@@ -3911,7 +3920,7 @@ def on_mindmeld_rematch():
 def api_version():
     """Return current build tag. Client polls and reloads if its loaded
     version doesn't match — catches stale browser/edge caches."""
-    return jsonify({'version': 'v39'})
+    return jsonify({'version': 'v40'})
 
 
 def _no_cache_html(resp):
@@ -6425,7 +6434,7 @@ def admin_export():
     content = {k: _admin.list_items(k) for k in _admin.KINDS}
     payload = {
         'exported_at': time.time(),
-        'version': 'v39',
+        'version': 'v40',
         'profiles': profiles,
         'admin_content': content,
         'settings': _admin.get_settings(),
@@ -6682,27 +6691,216 @@ import football_league as _fbleague
 
 def _fb_player_json(p):
     return {'id': p['id'], 'name': p['name'], 'short': p['short'], 'pos': p['pos'],
-            'rating': p['rating'], 'price': p['price'], 'club': p['club'], 'attrs': p['attrs']}
+            'positions': p.get('positions', [p['pos']]), 'rating': p['rating'],
+            'price': p['price'], 'club': p['club'], 'country': p.get('country', ''),
+            'age': p.get('age', 0), 'attrs': p['attrs']}
 
 
 def _fb_load_league():
-    """Load the global table from storage, seeding it once if empty."""
+    """Load the global table from storage. Real entrants only — no synthetic
+    managers. The table is empty until real players record results."""
     s = _storage.kv_get_obj(_fbleague.LEAGUE_KEY, None)
     if not s:
-        s = _fbleague.seed_standings()
-        try:
-            _storage.kv_set_obj(_fbleague.LEAGUE_KEY, s)
-        except Exception:
-            pass
+        s = {}
     return s
 
 
-def _fb_record_result(uid, name, outcome, gf, ga):
-    """Record a ranked match result into the persistent global league."""
+# ---- Football player database (uploadable via admin CSV) ----
+
+_FB_PLAYERS_KEY = "fb_players_v1"
+# CSV columns the template uses (order matters for the downloadable template).
+_FB_CSV_COLUMNS = ["name", "short_name", "club", "country", "positions",
+                   "rating", "price", "age"]
+
+
+def _fb_rows_to_pool(rows):
+    """Normalize stored field-rows into engine player dicts."""
+    out = []
+    for r in rows:
+        out.append(_fbdata.player_from_fields(
+            name=r.get("name", ""), short=r.get("short_name") or r.get("short"),
+            pos=r.get("positions") or r.get("pos") or "MID",
+            rating=r.get("rating", 75), club=r.get("club", ""),
+            country=r.get("country", ""), age=r.get("age", 0),
+            price=r.get("price")))
+    return out
+
+
+def _fb_validate_pool(pool):
+    """Enough players per position to draft a squad and a CPU? Returns (ok, msg)."""
+    from collections import Counter
+    c = Counter(p["pos"] for p in pool)
+    need = {"GK": 2, "DEF": 6, "MID": 6, "FWD": 4}
+    missing = [f"{pos} (have {c.get(pos,0)}, need {n})"
+               for pos, n in need.items() if c.get(pos, 0) < n]
+    if missing:
+        return False, "Not enough players: " + "; ".join(missing)
+    if len(pool) < 20:
+        return False, f"Need at least 20 players, got {len(pool)}"
+    return True, ""
+
+
+def _fb_load_players_from_storage():
+    """On boot, swap in an admin-uploaded pool if one exists; else built-in."""
+    try:
+        rows = _storage.kv_get_list(_FB_PLAYERS_KEY)
+        if rows:
+            pool = _fb_rows_to_pool(rows)
+            ok, _ = _fb_validate_pool(pool)
+            if ok:
+                _fbdata.set_players(pool)
+                print(f"[football] loaded {len(pool)} uploaded players")
+                return
+    except Exception as e:
+        print("[football] player load failed, using built-in:", e)
+    _fbdata.reset_to_builtin()
+
+
+def _fb_players_csv_template():
+    """A CSV template with the right header and a few example rows."""
+    import io, csv as _csv
+    buf = io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(_FB_CSV_COLUMNS)
+    examples = [
+        ["Erling Haaland", "Haaland", "Man City", "Norway", "FWD", 91, 13.5, 24],
+        ["Bukayo Saka", "Saka", "Arsenal", "England", "MID/FWD", 87, 9.5, 23],
+        ["Virgil van Dijk", "Van Dijk", "Liverpool", "Netherlands", "DEF", 89, 6.5, 33],
+        ["Alisson", "Alisson", "Liverpool", "Brazil", "GK", 89, 5.5, 32],
+        ["Budget Defender", "Budget Def", "Lower FC", "England", "DEF", 64, 4.0, 21],
+    ]
+    for row in examples:
+        w.writerow(row)
+    return buf.getvalue()
+
+
+def _fb_parse_players_csv(text):
+    """Parse uploaded CSV text into field-rows. Returns (rows, error)."""
+    import io, csv as _csv
+    try:
+        text = text.lstrip("\ufeff")  # strip BOM
+        reader = _csv.DictReader(io.StringIO(text))
+        if not reader.fieldnames:
+            return None, "Empty file"
+        # case-insensitive header map
+        hmap = {(h or "").strip().lower(): h for h in reader.fieldnames}
+        def col(row, *names):
+            for n in names:
+                if n in hmap and hmap[n] in row:
+                    v = row[hmap[n]]
+                    if v is not None and str(v).strip() != "":
+                        return str(v).strip()
+            return ""
+        rows, seen = [], set()
+        for raw in reader:
+            name = col(raw, "name", "player", "full_name")
+            if not name:
+                continue
+            if name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            rows.append({
+                "name": name,
+                "short_name": col(raw, "short_name", "short", "display") or name,
+                "club": col(raw, "club", "team"),
+                "country": col(raw, "country", "nation", "nationality"),
+                "positions": col(raw, "positions", "position", "pos") or "MID",
+                "rating": col(raw, "rating", "ovr", "overall") or "75",
+                "price": col(raw, "price", "cost", "value"),
+                "age": col(raw, "age"),
+            })
+        if not rows:
+            return None, "No valid rows (need at least a 'name' column with values)"
+        return rows, None
+    except Exception as e:
+        return None, f"Could not parse CSV: {e}"
+
+
+@app.route('/api/admin/football/players', methods=['GET'])
+def admin_fb_players_status():
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    rows = _storage.kv_get_list(_FB_PLAYERS_KEY)
+    return jsonify({
+        'ok': True,
+        'count': len(_fbdata.get_pool()),
+        'source': 'uploaded' if rows else 'built-in',
+        'builtin_count': _fbdata.builtin_count(),
+        'by_position': _fbdata.position_counts(),
+    })
+
+
+@app.route('/api/admin/football/players/template', methods=['GET'])
+def admin_fb_players_template():
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    csv_text = _fb_players_csv_template()
+    resp = make_response(csv_text)
+    resp.headers['Content-Type'] = 'text/csv; charset=utf-8'
+    resp.headers['Content-Disposition'] = 'attachment; filename="football_players_template.csv"'
+    return resp
+
+
+@app.route('/api/admin/football/players', methods=['POST'])
+def admin_fb_players_upload():
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    # accept either a file upload or raw text in JSON
+    text = ''
+    if request.files.get('file'):
+        try:
+            text = request.files['file'].read().decode('utf-8', errors='replace')
+        except Exception:
+            return jsonify({'ok': False, 'error': 'Could not read file'}), 400
+    else:
+        data = request.get_json(silent=True) or {}
+        text = data.get('csv', '') or ''
+    if not text.strip():
+        return jsonify({'ok': False, 'error': 'No CSV provided'}), 400
+    rows, err = _fb_parse_players_csv(text)
+    if err:
+        return jsonify({'ok': False, 'error': err}), 400
+    pool = _fb_rows_to_pool(rows)
+    ok, msg = _fb_validate_pool(pool)
+    if not ok:
+        return jsonify({'ok': False, 'error': msg}), 400
+    try:
+        _storage.kv_set_list(_FB_PLAYERS_KEY, rows)
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'Save failed: {e}'}), 500
+    _fbdata.set_players(pool)
+    return jsonify({'ok': True, 'count': len(pool),
+                    'by_position': _fbdata.position_counts()})
+
+
+@app.route('/api/admin/football/players/reset', methods=['POST'])
+def admin_fb_players_reset():
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    try:
+        _storage.kv_set_list(_FB_PLAYERS_KEY, [])
+    except Exception:
+        pass
+    _fbdata.reset_to_builtin()
+    return jsonify({'ok': True, 'count': len(_fbdata.get_pool())})
+
+
+def _fb_get_rating(uid):
+    """Current global rating for a manager (START_RATING if not yet on the table)."""
+    if not uid:
+        return _fbleague.START_RATING
+    s = _fb_load_league()
+    row = s.get(uid)
+    return (row or {}).get('rating', _fbleague.START_RATING)
+
+
+def _fb_record_result(uid, name, outcome, opp_rating, gf, ga):
+    """Record a match result into the persistent global Manager Rating table.
+       opp_rating is the rating of whoever was played (CPU or human)."""
     if not uid:
         return None
     s = _fb_load_league()
-    _fbleague.apply_result(s, uid, name or 'Manager', outcome, gf, ga)
+    _fbleague.apply_result(s, uid, name or 'Manager', outcome, opp_rating, gf, ga)
     try:
         _storage.kv_set_obj(_fbleague.LEAGUE_KEY, s)
     except Exception:
@@ -6828,6 +7026,7 @@ def api_football_firsthalf():
         'cpu_name': cpu['name'],
         'cpu_tactic': cpu['tactic'],
         'cpu_formation': cpu['formation'],
+        'cpu_value': _fbgame.squad_cost(cpu),
         'your_zones': _fbgame.zone_strengths(squad),
         'cpu_zones': _fbgame.zone_strengths(cpu),
         'match_state': match_state,
@@ -6879,12 +7078,16 @@ def api_football_secondhalf():
     else:
         outcome = 'draw'
 
-    # Record into the persistent global league (server-authoritative score).
+    # Record into the persistent global Manager Rating (server-authoritative
+    # score). A quick match counts: the CPU has a calibrated rating, so beating
+    # a harder CPU lifts you more and losing to an easy one costs more.
     league_you = None
     if data.get('ranked') and data.get('user_id'):
+        cpu_level = ms.get('cpu_level', 'medium')
+        opp_rating = _fbleague.CPU_RATINGS.get(cpu_level, _fbleague.START_RATING)
         league_you = _fb_record_result(
             data.get('user_id'), data.get('name'),
-            outcome, m['home_score'], m['away_score'])
+            outcome, opp_rating, m['home_score'], m['away_score'])
 
     return jsonify({
         'ok': True,
@@ -6919,7 +7122,9 @@ def fbmp_public_state(fbmp):
     ready = {s: bool((subs.get(s) or {}).get('ready')) for s in names}
     out = {
         'phase': fbmp.get('phase', 'draft'),
+        'mode': fbmp.get('mode', 'faceoff'),
         'budget': fbmp.get('budget', _fbgame.BUDGET),
+        'sids': fbmp.get('sids', [s for s in names]),
         'home_sid': fbmp.get('home_sid'),
         'away_sid': fbmp.get('away_sid'),
         'names': names,
@@ -6930,11 +7135,75 @@ def fbmp_public_state(fbmp):
     return out
 
 
+def _fb_run_group(fbmp):
+    """Simulate a round-robin mini-league among all ready managers and build a
+    final table. Each pairing also moves both managers' global ratings, using
+    frozen pre-tournament ratings so the order of matches does not matter."""
+    sids = fbmp.get('sids') or list(fbmp.get('names', {}).keys())
+    subs = fbmp['submissions']
+    names = fbmp['names']
+    uids = fbmp.get('uids', {})
+    table = {s: {'sid': s, 'name': names.get(s, 'Manager'), 'P': 0, 'W': 0,
+                 'D': 0, 'L': 0, 'GF': 0, 'GA': 0, 'Pts': 0} for s in sids}
+    matches = []
+    pre = {s: _fb_get_rating(uids.get(s)) for s in sids}
+    league = _fb_load_league()
+    for i in range(len(sids)):
+        for j in range(i + 1, len(sids)):
+            a, b = sids[i], sids[j]
+            m = _fbmatch.simulate_match(
+                subs[a]['squad'], subs[b]['squad'],
+                home_tactic=subs[a]['tactic'], away_tactic=subs[b]['tactic'],
+                give_home_edge=False, away_ai=False,
+                home_name=names[a], away_name=names[b])
+            hsc, asc = m['home_score'], m['away_score']
+            matches.append({'a': a, 'b': b, 'a_name': names[a], 'b_name': names[b],
+                            'a_score': hsc, 'b_score': asc})
+            table[a]['P'] += 1; table[b]['P'] += 1
+            table[a]['GF'] += hsc; table[a]['GA'] += asc
+            table[b]['GF'] += asc; table[b]['GA'] += hsc
+            if hsc > asc:
+                a_oc, b_oc = 'win', 'loss'
+                table[a]['W'] += 1; table[a]['Pts'] += 3; table[b]['L'] += 1
+            elif hsc < asc:
+                a_oc, b_oc = 'loss', 'win'
+                table[b]['W'] += 1; table[b]['Pts'] += 3; table[a]['L'] += 1
+            else:
+                a_oc = b_oc = 'draw'
+                table[a]['D'] += 1; table[b]['D'] += 1
+                table[a]['Pts'] += 1; table[b]['Pts'] += 1
+            if uids.get(a):
+                _fbleague.apply_result(league, uids[a], names[a], a_oc, pre[b], hsc, asc)
+            if uids.get(b):
+                _fbleague.apply_result(league, uids[b], names[b], b_oc, pre[a], asc, hsc)
+    try:
+        _storage.kv_set_obj(_fbleague.LEAGUE_KEY, league)
+    except Exception as e:
+        print('[fbmp] group league save failed:', e)
+    rows = sorted(table.values(),
+                  key=lambda r: (-r['Pts'], -(r['GF'] - r['GA']), -r['GF'], r['name']))
+    for k, r in enumerate(rows):
+        r['pos'] = k + 1
+        r['GD'] = r['GF'] - r['GA']
+        uid = uids.get(r['sid'])
+        post = (league.get(uid) or {}).get('rating') if uid else None
+        r['rating'] = post
+        r['delta'] = (post - pre[r['sid']]) if post is not None else 0
+        r['tier'] = _fbleague.tier_for(post)['name'] if post is not None else ''
+    fbmp['result'] = {
+        'mode': 'group',
+        'table': rows,
+        'matches': matches,
+        'result_id': int(time.time() * 1000),
+    }
+    fbmp['phase'] = 'match'
+
+
 @socketio.on('football_ready')
 def on_football_ready(data):
-    """A player locks in their squad + tactic. When both are ready the server
-    simulates one match (no AI, no home edge) and broadcasts the same timeline
-    to both clients, recording both results in the global league."""
+    """A player locks in their squad + tactic. When everyone is ready the server
+    simulates the match(es) -- a single 90 minutes in faceoff, or a full
+    round-robin in a group -- and broadcasts the result, updating ratings."""
     sid = request.sid
     room, code = _get_room_for_sid(sid)
     if not room:
@@ -6964,45 +7233,68 @@ def on_football_ready(data):
             'squad': squad, 'tactic': tactic, 'ready': True,
             'name': fbmp['names'].get(sid, 'Manager'),
         }
-        home_sid = fbmp['home_sid']
-        away_sid = fbmp['away_sid']
-        both = ((fbmp['submissions'].get(home_sid) or {}).get('ready')
-                and (fbmp['submissions'].get(away_sid) or {}).get('ready'))
-        if both:
-            hs = fbmp['submissions'][home_sid]
-            as_ = fbmp['submissions'][away_sid]
-            m = _fbmatch.simulate_match(
-                hs['squad'], as_['squad'],
-                home_tactic=hs['tactic'], away_tactic=as_['tactic'],
-                give_home_edge=False, away_ai=False,
-                home_name=fbmp['names'][home_sid], away_name=fbmp['names'][away_sid])
-            if m['home_score'] > m['away_score']:
-                home_oc, away_oc = 'win', 'loss'
-            elif m['home_score'] < m['away_score']:
-                home_oc, away_oc = 'loss', 'win'
+        sids = fbmp.get('sids') or list(fbmp.get('names', {}).keys())
+        all_ready = all((fbmp['submissions'].get(s) or {}).get('ready') for s in sids)
+        if all_ready:
+            if fbmp.get('mode') == 'group':
+                _fb_run_group(fbmp)
             else:
-                home_oc = away_oc = 'draw'
-            fbmp['result'] = {
-                'home_sid': home_sid, 'away_sid': away_sid,
-                'home_name': fbmp['names'][home_sid], 'away_name': fbmp['names'][away_sid],
-                'home_score': m['home_score'], 'away_score': m['away_score'],
-                'events': m['events'], 'stats': m['stats'],
-                'home_zones': _fbgame.zone_strengths(hs['squad']),
-                'away_zones': _fbgame.zone_strengths(as_['squad']),
-                'result_id': int(time.time() * 1000),
-            }
-            fbmp['phase'] = 'match'
+                _fb_run_faceoff(fbmp)
             state['phase'] = 'fb_match'
-            uids = fbmp.get('uids', {})
-            try:
-                _fb_record_result(uids.get(home_sid), fbmp['names'][home_sid],
-                                  home_oc, m['home_score'], m['away_score'])
-                _fb_record_result(uids.get(away_sid), fbmp['names'][away_sid],
-                                  away_oc, m['away_score'], m['home_score'])
-            except Exception as e:
-                print('[fbmp] league record failed:', e)
         touch_room(room)
     broadcast_state(room['state'], code)
+
+
+def _fb_run_faceoff(fbmp):
+    """Single 90-minute 1v1: simulate, build the result, update both ratings."""
+    home_sid = fbmp['home_sid']
+    away_sid = fbmp['away_sid']
+    hs = fbmp['submissions'][home_sid]
+    as_ = fbmp['submissions'][away_sid]
+    m = _fbmatch.simulate_match(
+        hs['squad'], as_['squad'],
+        home_tactic=hs['tactic'], away_tactic=as_['tactic'],
+        give_home_edge=False, away_ai=False,
+        home_name=fbmp['names'][home_sid], away_name=fbmp['names'][away_sid])
+    if m['home_score'] > m['away_score']:
+        home_oc, away_oc = 'win', 'loss'
+    elif m['home_score'] < m['away_score']:
+        home_oc, away_oc = 'loss', 'win'
+    else:
+        home_oc = away_oc = 'draw'
+    fbmp['result'] = {
+        'mode': 'faceoff',
+        'home_sid': home_sid, 'away_sid': away_sid,
+        'home_name': fbmp['names'][home_sid], 'away_name': fbmp['names'][away_sid],
+        'home_score': m['home_score'], 'away_score': m['away_score'],
+        'events': m['events'], 'stats': m['stats'],
+        'home_zones': _fbgame.zone_strengths(hs['squad']),
+        'away_zones': _fbgame.zone_strengths(as_['squad']),
+        'home_value': _fbgame.squad_cost(hs['squad']),
+        'away_value': _fbgame.squad_cost(as_['squad']),
+        'result_id': int(time.time() * 1000),
+    }
+    fbmp['phase'] = 'match'
+    uids = fbmp.get('uids', {})
+    try:
+        home_uid = uids.get(home_sid)
+        away_uid = uids.get(away_sid)
+        home_pre = _fb_get_rating(home_uid)
+        away_pre = _fb_get_rating(away_uid)
+        _fb_record_result(home_uid, fbmp['names'][home_sid],
+                          home_oc, away_pre, m['home_score'], m['away_score'])
+        _fb_record_result(away_uid, fbmp['names'][away_sid],
+                          away_oc, home_pre, m['away_score'], m['home_score'])
+        home_post = _fb_get_rating(home_uid)
+        away_post = _fb_get_rating(away_uid)
+        fbmp['result']['home_rating'] = home_post
+        fbmp['result']['away_rating'] = away_post
+        fbmp['result']['home_delta'] = home_post - home_pre
+        fbmp['result']['away_delta'] = away_post - away_pre
+        fbmp['result']['home_tier'] = _fbleague.tier_for(home_post)['name']
+        fbmp['result']['away_tier'] = _fbleague.tier_for(away_post)['name']
+    except Exception as e:
+        print('[fbmp] league record failed:', e)
 
 
 @socketio.on('football_rematch')
@@ -7184,6 +7476,10 @@ def boot_once():
             load_profiles()
         except Exception as e:
             print(f"[boot] load_profiles failed: {e}")
+        try:
+            _fb_load_players_from_storage()
+        except Exception as e:
+            print(f"[boot] football player load failed: {e}")
         try:
             refresh_all_admin_content()
         except Exception as e:

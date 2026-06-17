@@ -3926,19 +3926,57 @@ body[data-theme="bold"] #home-profile-card .streak-lab { color: rgba(0,0,0,0.6) 
 .fb-ht-panel .fb-bench-chip.bringon{border-color:var(--accent);background:var(--accent-soft)}
 
 /* ---- Global league table ---- */
-.fb-league-head,.fb-league-row{display:grid;grid-template-columns:26px 1fr 24px 24px 24px 24px 34px;align-items:center;gap:3px;padding:9px 4px}
+.fb-league-head,.fb-league-row{display:grid;grid-template-columns:26px 1fr auto 48px;align-items:center;gap:6px;padding:9px 4px}
 .fb-league-head{font-size:11px;color:var(--muted);font-weight:700;border-bottom:1px solid var(--gray-200);text-transform:uppercase}
-.fb-league-head span{text-align:center}
+.fb-league-head .fb-lg-form,.fb-league-head .fb-lg-rating{text-align:center}
 .fb-league-row{font-size:13px;border-bottom:1px solid var(--gray-100)}
-.fb-league-row span{text-align:center}
-.fb-lg-pos{color:var(--muted);font-weight:700}
-.fb-lg-name{text-align:left!important;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fb-lg-pts{font-weight:700}
+.fb-lg-pos{color:var(--muted);font-weight:700;text-align:center}
+.fb-lg-name{text-align:left;font-weight:600;display:flex;flex-direction:column;gap:1px;min-width:0;overflow:hidden}
+.fb-lg-name>:first-child,.fb-lg-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fb-lg-sub{font-size:10px;color:var(--muted);font-weight:600;text-transform:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fb-lg-rating{font-weight:800;text-align:center;font-variant-numeric:tabular-nums}
+.fb-lg-form{display:flex;gap:2px;justify-content:flex-end}
+.fb-fm{width:15px;height:15px;line-height:15px;border-radius:4px;font-size:9px;font-weight:800;text-align:center;color:#fff}
+.fb-fm.w{background:#1ea672}.fb-fm.d{background:#9aa0a6}.fb-fm.l{background:#e0533d}.fb-fm.none{background:var(--gray-200);color:var(--muted)}
 .fb-league-row.you{background:var(--accent-soft);border-radius:8px}
-.fb-league-row.you .fb-lg-pts{color:var(--accent-dark)}
+.fb-league-row.you .fb-lg-rating{color:var(--accent-dark)}
 .fb-lg-tag{font-size:9px;background:var(--text);color:var(--bg);padding:1px 5px;border-radius:99px;font-weight:700}
 .fb-league-you{margin-top:8px;border-top:2px solid var(--gray-200)}
 .fb-link-btn{background:none;border:none;color:var(--accent-dark);font-weight:600;font-size:13px;cursor:pointer;display:block;margin:10px auto 0;text-align:center}
 
 /* ---- Cup banner ---- */
 .fb-cup-banner{background:var(--accent-soft);border:1px solid var(--accent);border-radius:10px;padding:9px 12px;font-size:13px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--accent-dark)}
+
+/* ---- Group mini-league result table ---- */
+.fb-grp-head,.fb-grp-row{display:grid;grid-template-columns:26px 1fr 20px 20px 20px 20px 30px;align-items:center;gap:3px;padding:9px 3px}
+.fb-grp-head{font-size:11px;color:var(--muted);font-weight:700;border-bottom:1px solid var(--gray-200);text-transform:uppercase}
+.fb-grp-head span{text-align:center}
+.fb-grp-row{font-size:13px;border-bottom:1px solid var(--gray-100)}
+.fb-grp-row span{text-align:center}
+.fb-grp-row .fb-lg-pos{color:var(--muted);font-weight:700}
+.fb-grp-row .fb-lg-name{text-align:left;font-weight:600;display:flex;flex-direction:column;gap:1px;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.fb-grp-pts{font-weight:800}
+.fb-grp-row.you{background:var(--accent-soft);border-radius:8px}
+.fb-grp-row.you .fb-grp-pts{color:var(--accent-dark)}
+
+/* ---- Football Play / Global League tabs ---- */
+.fb-tabs{display:flex;gap:4px;background:var(--gray-100);border-radius:10px;padding:4px;margin:6px 0 14px}
+.fb-tab{flex:1;border:none;background:none;padding:9px 6px;border-radius:7px;font-size:14px;font-weight:700;color:var(--muted);cursor:pointer}
+.fb-tab.active{background:var(--bg);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+
+/* ---- 2D match pitch ---- */
+.fb-pitch-wrap{position:relative;margin:10px 0 4px;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.18)}
+#fb-pitch{display:block;width:100%;height:auto}
+#fb-pitch-stripes rect:nth-child(odd){fill:rgba(255,255,255,.04)}
+.fb-pitch-dot{transition:none;transform-box:fill-box;transform-origin:center}
+.fb-pitch-ball-anim{transition:cx .35s linear, cy .35s linear}
+.fb-pitch-controls{position:absolute;top:6px;right:6px;display:flex;gap:6px}
+.fb-pitch-btn{background:rgba(0,0,0,.42);color:#fff;border:none;border-radius:7px;padding:5px 10px;font-size:12px;font-weight:700;cursor:pointer;backdrop-filter:blur(2px)}
+.fb-pitch-btn:active{transform:scale(.96)}
+.fb-pitch-dot.goal-pulse{animation:fbGoalPulse .5s ease 3}
+@keyframes fbGoalPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.7)}}
+
+/* ---- ambient commentary + squad value ---- */
+.fb-feed-item.ambient{opacity:.7}
+.fb-feed-item.ambient .fb-ico{opacity:.5}
+.fb-team-val{font-size:11px;color:var(--muted);font-weight:700;margin-top:1px}

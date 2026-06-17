@@ -1,104 +1,128 @@
 # -*- coding: utf-8 -*-
 """
-Persistent global league for the football-manager game.
+Persistent global Manager Rating for the football-manager game.
 
-Every match a player finishes updates their row in one shared, never-resetting
-table (stored in Upstash via storage.kv_*). The table is seeded once with a set
-of CPU managers so it feels populated and competitive from the very first game,
-and real managers climb through them as they rack up results.
+Every completed match updates a manager's chess-style rating (Elo): beating a
+stronger opponent gains more, losing to a weaker one costs more, so the global
+table measures skill rather than how many games you have played. Real entrants
+only -- there are no synthetic managers.
 
-Pure logic here (seed / apply a result / rank). The server owns the storage
-read-write and the user identity.
+Pure logic lives here (rate a result / tier / rank). The server owns storage and
+identity, and supplies each opponent's rating: a 1v1 opponent's stored rating, or
+a calibrated rating for the CPU.
 """
-
-import random
-
-# CPU managers that populate the global table from day one.
-_SEED_NAMES = [
-    "Thunder FC", "Red Devils 99", "Blue Moon City", "Samba Stars",
-    "Catalan Kings", "Bavarian Blitz", "Mersey Reds", "North London",
-    "Saints Alive", "Iron Wolves", "Old Lady Turin", "Rossoneri X",
-    "Azzurri Napoli", "Parisian Elite", "Galactico Madrid", "Yorkshire Terriers",
-    "Steel City", "Harbour United", "Desert Hawks", "River Kings",
-    "Green Army", "Citizen Sky", "Toffee Blues", "Wolf Pack",
-]
 
 LEAGUE_KEY = "fb_global_league_v1"
 
+START_RATING = 1000
+RATING_FLOOR = 100
+K_PROVISIONAL = 40        # first few games move fast (quick calibration)
+K_STABLE = 24
+PROVISIONAL_GAMES = 10
+
+# Calibrated ratings for the CPU difficulties, so a result against the computer
+# moves the manager rating by a sensible amount (beat the hard CPU and climb;
+# lose to the easy CPU and it stings).
+CPU_RATINGS = {"easy": 800, "medium": 1000, "hard": 1200}
+
+# Rating tiers: status + a short key the client uses for badge styling.
+_TIERS = [
+    (1350, "World Class", "wc"),
+    (1200, "Elite", "elite"),
+    (1050, "Pro", "pro"),
+    (900,  "Semi-Pro", "semipro"),
+    (0,    "Sunday League", "sunday"),
+]
+
+
+def tier_for(rating):
+    for floor, name, key in _TIERS:
+        if rating >= floor:
+            return {"name": name, "key": key}
+    return {"name": "Sunday League", "key": "sunday"}
+
 
 def blank_row(name):
-    return {"name": name or "Manager", "P": 0, "W": 0, "D": 0, "L": 0,
-            "GF": 0, "GA": 0, "Pts": 0}
+    return {"name": name or "Manager", "rating": START_RATING, "games": 0,
+            "W": 0, "D": 0, "L": 0, "GF": 0, "GA": 0,
+            "best": START_RATING, "form": []}
 
 
-def seed_standings():
-    """A deterministic, plausible populated table of CPU managers."""
-    rng = random.Random(20260617)
-    out = {}
-    for i, nm in enumerate(_SEED_NAMES):
-        played = rng.randint(20, 32)
-        w = rng.randint(played // 5, max(played // 5, played - played // 3))
-        w = min(w, played)
-        d = rng.randint(0, played - w)
-        l = played - w - d
-        gf = w * rng.randint(1, 3) + d + rng.randint(0, 9)
-        ga = l * rng.randint(1, 3) + d + rng.randint(0, 7)
-        out["seed_%02d" % i] = {
-            "name": nm, "P": played, "W": w, "D": d, "L": l,
-            "GF": gf, "GA": ga, "Pts": w * 3 + d, "cpu": True,
-        }
-    return out
+def _expected(my_rating, opp_rating):
+    return 1.0 / (1.0 + 10 ** ((opp_rating - my_rating) / 400.0))
 
 
-def apply_result(standings, uid, name, outcome, gf, ga):
-    """Update (or create) a manager's row with one match result."""
+def apply_result(standings, uid, name, outcome, opp_rating, gf, ga):
+    """Update (or create) a manager's row with one match result, Elo-style.
+       opp_rating is the rating of whoever they played (CPU or human)."""
     row = standings.get(uid) or blank_row(name)
     if name:
         row["name"] = name
-    row["P"] = row.get("P", 0) + 1
+    row.setdefault("rating", START_RATING)
+    row.setdefault("games", 0)
+    row.setdefault("best", row["rating"])
+    row.setdefault("form", [])
+
+    score = 1.0 if outcome == "win" else (0.5 if outcome == "draw" else 0.0)
+    exp = _expected(row["rating"], float(opp_rating))
+    k = K_PROVISIONAL if row["games"] < PROVISIONAL_GAMES else K_STABLE
+    delta = round(k * (score - exp))
+    row["rating"] = max(RATING_FLOOR, row["rating"] + delta)
+    row["games"] += 1
     row["GF"] = row.get("GF", 0) + int(gf)
     row["GA"] = row.get("GA", 0) + int(ga)
     if outcome == "win":
         row["W"] = row.get("W", 0) + 1
-        row["Pts"] = row.get("Pts", 0) + 3
     elif outcome == "draw":
         row["D"] = row.get("D", 0) + 1
-        row["Pts"] = row.get("Pts", 0) + 1
     else:
         row["L"] = row.get("L", 0) + 1
+    if row["rating"] > row.get("best", 0):
+        row["best"] = row["rating"]
+    f = list(row.get("form", []))
+    f.append("W" if outcome == "win" else ("D" if outcome == "draw" else "L"))
+    row["form"] = f[-5:]
+    row["last_delta"] = delta
     standings[uid] = row
     return standings
 
 
 def ranked_table(standings):
-    """Sorted standings (points, then goal difference, then goals scored)."""
+    """Sorted by rating (then games played, then name)."""
     rows = []
     for uid, r in standings.items():
-        gd = r.get("GF", 0) - r.get("GA", 0)
+        rating = r.get("rating", START_RATING)
+        t = tier_for(rating)
         rows.append({
             "uid": uid, "name": r.get("name", "Manager"),
-            "P": r.get("P", 0), "W": r.get("W", 0), "D": r.get("D", 0),
-            "L": r.get("L", 0), "GF": r.get("GF", 0), "GA": r.get("GA", 0),
-            "GD": gd, "Pts": r.get("Pts", 0), "cpu": bool(r.get("cpu")),
+            "rating": rating, "games": r.get("games", 0),
+            "W": r.get("W", 0), "D": r.get("D", 0), "L": r.get("L", 0),
+            "GF": r.get("GF", 0), "GA": r.get("GA", 0),
+            "best": r.get("best", rating),
+            "form": list(r.get("form", []))[-5:],
+            "tier": t["name"], "tier_key": t["key"],
+            "last_delta": r.get("last_delta", 0),
         })
-    rows.sort(key=lambda r: (-r["Pts"], -r["GD"], -r["GF"], r["name"]))
+    rows.sort(key=lambda r: (-r["rating"], -r["games"], r["name"]))
     for i, r in enumerate(rows):
         r["pos"] = i + 1
     return rows
 
 
 if __name__ == "__main__":
-    s = seed_standings()
-    print(f"seeded {len(s)} CPU managers")
-    # a new player wins a few, draws one, loses one
+    s = {}
     uid = "u_test"
-    for oc, gf, ga in [("win", 3, 1), ("win", 2, 0), ("draw", 1, 1), ("loss", 0, 2), ("win", 4, 2)]:
-        apply_result(s, uid, "You", oc, gf, ga)
-    table = ranked_table(s)
-    me = next(r for r in table if r["uid"] == uid)
-    print(f"after 5 games -> {me['name']}: P{me['P']} W{me['W']} D{me['D']} L{me['L']} "
-          f"GF{me['GF']} GA{me['GA']} GD{me['GD']} Pts{me['Pts']} -> position {me['pos']}/{len(table)}")
-    print("top 5:")
-    for r in table[:5]:
-        tag = " (you)" if r["uid"] == uid else ""
-        print(f"  {r['pos']:>2}. {r['name']:<18} P{r['P']:>2} W{r['W']:>2} D{r['D']:>2} L{r['L']:>2} GD{r['GD']:>+3} Pts{r['Pts']:>2}{tag}")
+    seq = [("win", "medium", 3, 1), ("win", "hard", 2, 1), ("draw", "hard", 1, 1),
+           ("loss", "easy", 0, 2), ("win", "medium", 4, 2)]
+    for oc, lvl, gf, ga in seq:
+        apply_result(s, uid, "You", oc, CPU_RATINGS[lvl], gf, ga)
+    me = s[uid]
+    print(f"after {me['games']} games -> rating {me['rating']} ({tier_for(me['rating'])['name']}) "
+          f"W{me['W']} D{me['D']} L{me['L']} form {''.join(me['form'])}")
+    for u, r in [("u_a", 1180), ("u_b", 980), ("u_c", 1320)]:
+        s[u] = {"name": u, "rating": r, "games": 20, "W": 10, "D": 5, "L": 5,
+                "GF": 30, "GA": 25, "best": r, "form": ["W", "W", "D", "L", "W"]}
+    print("table:")
+    for row in ranked_table(s):
+        tag = " (you)" if row["uid"] == uid else ""
+        print(f"  {row['pos']}. {row['name']:<8} {row['rating']:>4} {row['tier']:<12} {''.join(row['form'])}{tag}")
