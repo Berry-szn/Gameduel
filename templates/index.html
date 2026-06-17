@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#ffffff">
     <title>GameRoom</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=48">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=49">
     <!-- Google Identity Services (Sign in with Google). Loaded async; the
          client wires it up once /api/public/config returns the client id. -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -2144,6 +2144,6 @@
         window.INITIAL_MATCH_CODE = "{{ match_code or '' }}";
     </script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="{{ url_for('static', filename='app.js') }}?v=48"></script>
+    <script src="{{ url_for('static', filename='app.js') }}?v=49"></script>
 </body>
 </html>

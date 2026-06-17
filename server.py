@@ -52,7 +52,8 @@ from flask_socketio import SocketIO, emit, join_room as sio_join_room, leave_roo
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'guessduel-server-key'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode=_ASYNC_MODE)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode=_ASYNC_MODE,
+                    ping_interval=10, ping_timeout=20)
 print(f"[boot] socketio async_mode={_ASYNC_MODE}")
 
 
@@ -4003,7 +4004,7 @@ def on_mindmeld_rematch():
 def api_version():
     """Return current build tag. Client polls and reloads if its loaded
     version doesn't match — catches stale browser/edge caches."""
-    return jsonify({'version': 'v48'})
+    return jsonify({'version': 'v49'})
 
 
 def _no_cache_html(resp):
@@ -6527,7 +6528,7 @@ def admin_export():
     content = {k: _admin.list_items(k) for k in _admin.KINDS}
     payload = {
         'exported_at': time.time(),
-        'version': 'v48',
+        'version': 'v49',
         'profiles': profiles,
         'admin_content': content,
         'settings': _admin.get_settings(),

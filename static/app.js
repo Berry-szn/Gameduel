@@ -407,7 +407,7 @@ function debugLogInit() {
 // Build version this JS file expects. Must match server's /version response.
 // Auto-reload if they diverge (catches stale browser caches even when the
 // no-cache headers are bypassed by a proxy / service worker).
-const GAMEROOM_BUILD = 'v48';
+const GAMEROOM_BUILD = 'v49';
 async function checkBuildVersion() {
     try {
         const res = await fetch('/version', {cache: 'no-store'});
