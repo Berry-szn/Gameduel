@@ -2164,6 +2164,9 @@ def on_disconnect():
                     'geo_round', 'geo_round_end')
         is_rt_faceoff = (state.get('mode_hint') == 'faceoff'
                          and state.get('phase') in rt_games)
+        is_fb_faceoff = (state.get('mode_hint') == 'faceoff'
+                         and state.get('game_type') == 'football'
+                         and state.get('phase') in ('fb_draft', 'fb_match'))
 
     if is_rt_faceoff:
         def rt_forfeit_check():
@@ -2210,6 +2213,50 @@ def on_disconnect():
                 print(f"[rt-disconnect-forfeit] {leaver_name} d/c'd in {code}; "
                       f"{opponents[0]['name']} wins ({gt})")
         socketio.start_background_task(rt_forfeit_check)
+
+    if is_fb_faceoff:
+        def fb_forfeit_check():
+            socketio.sleep(25)   # survive a brief blip; reconnect re-maps instead
+            with room['lock']:
+                st = room['state']
+                gone = st['players'].get(sid)
+                if not gone or not gone.get('disconnected_at'):
+                    return
+                leaver_uid = gone.get('user_id')
+                if leaver_uid:
+                    for osid, op in st['players'].items():
+                        if (osid != sid and op.get('user_id') == leaver_uid
+                                and op.get('disconnected_at') is None):
+                            return  # same manager reconnected on a new sid
+                opponents = [pp for pp in st['players'].values()
+                             if not pp.get('is_bot') and pp.get('sid') != sid
+                             and pp.get('disconnected_at') is None]
+                if (st.get('phase') not in ('fb_draft', 'fb_match')
+                        or len(opponents) != 1):
+                    return
+                leaver_name = gone.get('name')
+                res = _fb_award_forfeit(st, sid, leaver_name, opponents[0])
+                try:
+                    lp = get_profile(leaver_name, user_id=leaver_uid)
+                    lp['losses'] = (lp.get('losses', 0) or 0) + 1
+                    lp['games_played'] = (lp.get('games_played', 0) or 0) + 1
+                    lp['current_streak'] = 0
+                    mark_profiles_dirty()
+                except Exception as e:
+                    print('[fb-dc-forfeit] loss record failed:', e)
+                if res:
+                    st['phase'] = 'fb_match'
+                if sid in st['players']:
+                    del st['players'][sid]
+                fbmp = st.get('football_mp')
+                if fbmp and isinstance(fbmp.get('sids'), list):
+                    fbmp['sids'] = [s for s in fbmp['sids'] if s != sid]
+                add_activity(st, 'opponent_forfeited', name=leaver_name,
+                             winner=opponents[0]['name'])
+                broadcast_state(st, code)
+                print(f"[fb-dc-forfeit] {leaver_name} d/c'd in {code}; "
+                      f"{opponents[0]['name']} wins 3-0")
+        socketio.start_background_task(fb_forfeit_check)
 
     def grace_check():
         # 5 minutes — enough for the host to switch to Telegram/WhatsApp to
@@ -2331,6 +2378,35 @@ def on_join_room(data):
                             if m['p1_sid'] == old_sid: m['p1_sid'] = sid
                             if m['p2_sid'] == old_sid: m['p2_sid'] = sid
                             if m['winner_sid'] == old_sid: m['winner_sid'] = sid
+                # Football MP reconnect re-mapping: keep this manager's squad and
+                # readiness attached to their NEW sid so a blip doesn't leave the
+                # opponent stuck on "waiting for opponent".
+                fbmp = state.get('football_mp')
+                if fbmp:
+                    if isinstance(fbmp.get('sids'), list):
+                        fbmp['sids'] = [sid if x == old_sid else x for x in fbmp['sids']]
+                    if fbmp.get('home_sid') == old_sid:
+                        fbmp['home_sid'] = sid
+                    if fbmp.get('away_sid') == old_sid:
+                        fbmp['away_sid'] = sid
+                    for _k in ('submissions', 'names', 'uids'):
+                        _d = fbmp.get(_k)
+                        if isinstance(_d, dict) and old_sid in _d:
+                            _d[sid] = _d.pop(old_sid)
+                    # If everyone is ready now (this manager readied just before
+                    # the blip), run the match that was waiting on them.
+                    if state.get('phase') == 'fb_draft':
+                        _sids = fbmp.get('sids') or list(fbmp.get('names', {}).keys())
+                        if _sids and all((fbmp['submissions'].get(s) or {}).get('ready')
+                                         for s in _sids):
+                            try:
+                                if fbmp.get('mode') == 'group':
+                                    _fb_run_group(fbmp)
+                                else:
+                                    _fb_run_faceoff(fbmp)
+                                state['phase'] = 'fb_match'
+                            except Exception as e:
+                                print('[fbmp reconnect] resume failed:', e)
                 add_activity(state, 'rejoined', name=name)
                 with SID_TO_ROOM_LOCK:
                     SID_TO_ROOM[sid] = code
@@ -3279,23 +3355,24 @@ def on_leave_game():
                 end_wordchain_game(room, winner_sid=winner_sid)
                 ended_by_forfeit = True
 
-            # Football 1v1 forfeit: opponent left during draft or the match.
-            # The match result (if both were ready) is already simulated and
-            # recorded server-side, so a mid-replay leave cannot change it; a
-            # leave during drafting simply cancels with no result.
+            # Football 1v1 forfeit. If the match has not been played yet (someone
+            # left during the draft or while waiting), award the manager who
+            # stayed a 3-0 win and record it in the league. If the match was
+            # already simulated, that result stands.
             if (is_faceoff and in_live_game and len(human_opponents) == 1
                 and state.get('game_type', 'guessduel') == 'football'
                 and not ended_by_forfeit):
-                del state['players'][sid]
                 fbmp = state.get('football_mp')
+                winner = human_opponents[0]
+                res = _fb_award_forfeit(state, sid, name, winner)
+                if res:
+                    state['phase'] = 'fb_match'
+                del state['players'][sid]
                 if fbmp and isinstance(fbmp.get('submissions'), dict):
                     fbmp['submissions'].pop(sid, None)
-                add_activity(state, 'opponent_forfeited', name=name,
-                             winner=human_opponents[0]['name'])
-                socketio.emit('opponent_left', {
-                    'leaver_name': name,
-                    'msg': f'{name} left the match'
-                }, room=code)
+                if fbmp and isinstance(fbmp.get('sids'), list):
+                    fbmp['sids'] = [s for s in fbmp['sids'] if s != sid]
+                add_activity(state, 'opponent_forfeited', name=name, winner=winner['name'])
                 ended_by_forfeit = True
 
             # TimeShot forfeit: opponent left mid-round
@@ -3920,7 +3997,7 @@ def on_mindmeld_rematch():
 def api_version():
     """Return current build tag. Client polls and reloads if its loaded
     version doesn't match — catches stale browser/edge caches."""
-    return jsonify({'version': 'v40'})
+    return jsonify({'version': 'v46'})
 
 
 def _no_cache_html(resp):
@@ -5751,6 +5828,15 @@ def api_profile_rename():
         if sid and sid in SID_TO_USER:
             SID_TO_USER[sid]['name'] = new_name
 
+    # Sync the football league display name if this manager is on the table.
+    try:
+        lg = _fb_load_league()
+        if user_id in lg:
+            lg[user_id]['name'] = new_name
+            _storage.kv_set_obj(_fbleague.LEAGUE_KEY, lg)
+    except Exception:
+        pass
+
     return jsonify({'ok': True, 'name': new_name,
                     'avatar_color': p.get('avatar_color'),
                     'has_image': bool(p.get('avatar_image'))})
@@ -5804,7 +5890,8 @@ def on_challenge_send(data=None):
     target_uid = (data.get('target_user_id') or '').strip()
     game = (data.get('game') or 'guessduel').strip()
     if game not in ('guessduel', 'wordchain', 'footymind', 'trivia', 'geo',
-                    'oneshot', 'timeshot', 'geography', 'halfit', 'angle', 'pictionary'):
+                    'oneshot', 'timeshot', 'geography', 'halfit', 'angle',
+                    'pictionary', 'football'):
         emit('challenge_error', {'msg': 'Unknown game'})
         return
     with SID_TO_USER_LOCK:
@@ -6434,7 +6521,7 @@ def admin_export():
     content = {k: _admin.list_items(k) for k in _admin.KINDS}
     payload = {
         'exported_at': time.time(),
-        'version': 'v40',
+        'version': 'v46',
         'profiles': profiles,
         'admin_content': content,
         'settings': _admin.get_settings(),
@@ -6885,6 +6972,27 @@ def admin_fb_players_reset():
     return jsonify({'ok': True, 'count': len(_fbdata.get_pool())})
 
 
+@app.route('/api/admin/football/league', methods=['GET'])
+def admin_fb_league_status():
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    s = _fb_load_league()
+    return jsonify({'ok': True, 'managers': len(s)})
+
+
+@app.route('/api/admin/football/league/reset', methods=['POST'])
+def admin_fb_league_reset():
+    """Wipe the global Manager Rating table. Clears any leftover synthetic
+    managers from older builds; the table then refills with real entrants only."""
+    if not _admin_authed():
+        return jsonify({'error': 'unauthorized'}), 401
+    try:
+        _storage.kv_set_obj(_fbleague.LEAGUE_KEY, {})
+    except Exception as e:
+        return jsonify({'ok': False, 'msg': str(e)}), 500
+    return jsonify({'ok': True, 'managers': 0})
+
+
 def _fb_get_rating(uid):
     """Current global rating for a manager (START_RATING if not yet on the table)."""
     if not uid:
@@ -6907,6 +7015,47 @@ def _fb_record_result(uid, name, outcome, opp_rating, gf, ga):
         pass
     table = _fbleague.ranked_table(s)
     return next((r for r in table if r['uid'] == uid), None)
+
+
+def _fb_award_forfeit(state, leaver_sid, leaver_name, winner):
+    """Award the remaining 1v1 manager a recorded 3-0 walkover and set the room
+    result. Returns the result dict, or None if a match result already exists
+    (a played match is never overwritten) or there is no football_mp."""
+    fbmp = state.get('football_mp')
+    if not fbmp or fbmp.get('result'):
+        return None
+    uids = fbmp.get('uids', {})
+    names = fbmp.get('names', {})
+    win_sid = winner['sid']
+    win_uid = uids.get(win_sid) or winner.get('user_id')
+    win_name = names.get(win_sid) or winner.get('name', 'Manager')
+    lose_uid = uids.get(leaver_sid)
+    lose_name = names.get(leaver_sid) or leaver_name or 'Manager'
+    win_pre = win_post = None
+    try:
+        win_pre = _fb_get_rating(win_uid)
+        lose_pre = _fb_get_rating(lose_uid)
+        _fb_record_result(win_uid, win_name, 'win', lose_pre, 3, 0)
+        _fb_record_result(lose_uid, lose_name, 'loss', win_pre, 0, 3)
+        win_post = _fb_get_rating(win_uid)
+    except Exception as e:
+        print('[fb forfeit] league record failed:', e)
+    res = {
+        'mode': 'faceoff', 'forfeit': True,
+        'home_sid': win_sid, 'away_sid': leaver_sid,
+        'home_name': win_name, 'away_name': lose_name,
+        'home_score': 3, 'away_score': 0, 'events': [],
+        'stats': {'possession_home': 50, 'possession_away': 50, 'shots_home': 0,
+                  'shots_away': 0, 'sot_home': 0, 'sot_away': 0},
+        'home_zones': {}, 'away_zones': {}, 'result_id': int(time.time() * 1000),
+    }
+    if win_post is not None:
+        res['home_rating'] = win_post
+        res['home_delta'] = win_post - (win_pre or win_post)
+        res['home_tier'] = _fbleague.tier_for(win_post)['name']
+    fbmp['result'] = res
+    fbmp['phase'] = 'match'
+    return res
 
 
 @app.route('/api/football/new')

@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#ffffff">
     <title>GameRoom</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=40">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=46">
     <!-- Google Identity Services (Sign in with Google). Loaded async; the
          client wires it up once /api/public/config returns the client id. -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -1540,7 +1540,8 @@
             <button class="back-link" data-back="screen-home">&larr; Back</button>
             <div class="fb-tabs">
                 <button class="fb-tab active" data-fbtab="play">Play</button>
-                <button class="fb-tab" data-fbtab="league" id="fb-tab-league">Global League</button>
+                <button class="fb-tab" data-fbtab="league" id="fb-tab-league">League</button>
+                <button class="fb-tab fb-settings-tab" data-fbtab="settings">Settings</button>
             </div>
             <div class="muted small center">Team Manager</div>
             <h1 class="center">Build your team</h1>
@@ -1621,7 +1622,7 @@
             </div>
 
             <div class="fb-pitch-wrap">
-                <svg id="fb-pitch" viewBox="0 0 100 64" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+                <svg id="fb-match-pitch" viewBox="0 0 100 64" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
                     <defs>
                         <linearGradient id="fb-turf" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="0" stop-color="#2f9e51"/>
@@ -1688,7 +1689,49 @@
                 <button class="fb-sheet-close" id="fb-sheet-close">&times;</button>
             </div>
             <div class="muted small" id="fb-sheet-sub"></div>
+            <div id="fb-sheet-filters" class="fb-sheet-filters hidden">
+                <input type="text" id="fb-sheet-search" class="fb-sheet-search" placeholder="Search name or club..." autocomplete="off">
+                <div class="fb-sheet-filter-row">
+                    <select id="fb-sheet-club" class="fb-sheet-sel"><option value="">All clubs</option></select>
+                    <select id="fb-sheet-stars" class="fb-sheet-sel">
+                        <option value="0">All ratings</option>
+                        <option value="5">5&starf; (88+)</option>
+                        <option value="4">4&starf;+ (80+)</option>
+                        <option value="3">3&starf;+ (72+)</option>
+                        <option value="2">2&starf;+ (64+)</option>
+                    </select>
+                    <select id="fb-sheet-price" class="fb-sheet-sel">
+                        <option value="">Any price</option>
+                        <option value="aff">Affordable</option>
+                        <option value="6">&pound;6.0m or less</option>
+                        <option value="8">&pound;8.0m or less</option>
+                        <option value="10">&pound;10.0m or less</option>
+                        <option value="12">&pound;12.0m or less</option>
+                    </select>
+                    <select id="fb-sheet-sort" class="fb-sheet-sel">
+                        <option value="rating">Rating: high</option>
+                        <option value="price-lo">Price: low</option>
+                        <option value="price-hi">Price: high</option>
+                        <option value="name">Name: A&ndash;Z</option>
+                    </select>
+                </div>
+                <div class="fb-sheet-count" id="fb-sheet-count"></div>
+            </div>
             <div class="fb-sheet-list" id="fb-sheet-list"></div>
+        </div>
+    </div>
+
+    <div id="fb-settings-sheet" class="fb-sheet hidden">
+        <div class="fb-sheet-card">
+            <div class="fb-sheet-head">
+                <span>Manager settings</span>
+                <button class="fb-sheet-close" id="fb-settings-close">&times;</button>
+            </div>
+            <label style="margin-top:14px;display:block;">Manager name</label>
+            <input type="text" id="fb-mgr-name" class="fb-sheet-search" maxlength="20" placeholder="Your manager name" autocomplete="off">
+            <p class="muted small">This is the name shown in matches and on the global league.</p>
+            <button id="fb-mgr-save" class="btn btn-primary btn-block">Save name</button>
+            <div id="fb-mgr-msg" class="muted small center"></div>
         </div>
     </div>
 
@@ -1697,7 +1740,8 @@
             <button class="back-link" id="fb-league-back">&larr; Back</button>
             <div class="fb-tabs">
                 <button class="fb-tab" data-fbtab="play" id="fb-tab-play">Play</button>
-                <button class="fb-tab active" data-fbtab="league">Global League</button>
+                <button class="fb-tab active" data-fbtab="league">League</button>
+                <button class="fb-tab fb-settings-tab" data-fbtab="settings">Settings</button>
             </div>
             <h1 class="center">Global league</h1>
             <p class="muted small center">Manager Rating, not games played, decides your rank. Beat tougher managers to climb.</p>
@@ -1847,6 +1891,7 @@
                 <button class="challenge-game-btn" data-cg="halfit">HalfIt</button>
                 <button class="challenge-game-btn" data-cg="angle">Angle</button>
                 <button class="challenge-game-btn" data-cg="pictionary">Pictionary</button>
+                <button class="challenge-game-btn" data-cg="football">Team Manager</button>
                 <button class="challenge-game-btn" data-cg="trivia" disabled title="1v1 coming soon">TriviaRush</button>
                 <button class="challenge-game-btn" data-cg="footymind" disabled title="1v1 coming soon">FootyMind</button>
             </div>
@@ -1941,6 +1986,11 @@
                 <button class="howto-tab" data-howto="footymind">FootyMind</button>
                 <button class="howto-tab" data-howto="trivia">TriviaRush</button>
                 <button class="howto-tab" data-howto="geo">Geography</button>
+                <button class="howto-tab" data-howto="timeshot">TimeShot</button>
+                <button class="howto-tab" data-howto="halfit">HalfIt</button>
+                <button class="howto-tab" data-howto="angle">Angle</button>
+                <button class="howto-tab" data-howto="pictionary">Pictionary</button>
+                <button class="howto-tab" data-howto="football">Team Manager</button>
             </div>
             <div class="howto-content" id="howto-content"></div>
         </div>
@@ -2093,6 +2143,6 @@
         window.INITIAL_MATCH_CODE = "{{ match_code or '' }}";
     </script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="{{ url_for('static', filename='app.js') }}?v=40"></script>
+    <script src="{{ url_for('static', filename='app.js') }}?v=46"></script>
 </body>
 </html>

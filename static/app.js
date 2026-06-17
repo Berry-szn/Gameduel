@@ -407,7 +407,7 @@ function debugLogInit() {
 // Build version this JS file expects. Must match server's /version response.
 // Auto-reload if they diverge (catches stale browser caches even when the
 // no-cache headers are bypassed by a proxy / service worker).
-const GAMEROOM_BUILD = 'v40';
+const GAMEROOM_BUILD = 'v46';
 async function checkBuildVersion() {
     try {
         const res = await fetch('/version', {cache: 'no-store'});
@@ -2669,9 +2669,7 @@ function wireHome() {
                 soundClick();
                 try {
                     const g = card.dataset.game;
-                    // Map home-card 'geo' to howto's 'geography'
-                    const mapped = (g === 'geo') ? 'geography' : g;
-                    openHowtoModal(mapped);
+                    openHowtoModal(g);
                 } catch (err) {}
             };
             card.appendChild(pip);
@@ -5083,7 +5081,38 @@ const HOWTO_CONTENT = {
             <li><b>Capitals</b>: country → pick capital (multiple choice)</li>
             <li><b>Landmarks</b>: see an image, name what you see</li>
             <li><b>Continents</b>: country → pick continent</li></ul>
-        <p><b>Legend tier</b>: historical flags, empires, microstates, unrecognised states.</p>`
+        <p><b>Legend tier</b>: historical flags, empires, microstates, unrecognised states.</p>`,
+    timeshot: `
+        <h2>TimeShot</h2>
+        <p>A hidden clock runs. Stop it as close to the target time as you can. Closest to the target wins the round.</p>
+        <h3>Modes</h3>
+        <p>Solo vs the computer, 1v1 face-off, or friend group. Play a set number of rounds; the best score over the rounds wins.</p>`,
+    halfit: `
+        <h2>HalfIt</h2>
+        <p>Slice the shape. Each round you either cut it into exact halves or carve off a target weight. The closer your cut, the more you score.</p>
+        <h3>Modes</h3>
+        <p>Solo, 1v1 face-off, or friend group over a set number of rounds.</p>`,
+    angle: `
+        <h2>Angle</h2>
+        <p>A target angle is shown. Drag the arm to match it as precisely as you can. Closest to the target wins the round.</p>
+        <h3>Modes</h3>
+        <p>Solo, 1v1 face-off, or friend group. Pick the difficulty and number of rounds.</p>`,
+    pictionary: `
+        <h2>Pictionary</h2>
+        <p>Crack the emoji riddle. The emojis spell out a word or phrase. Type your answer. Stuck? Take a hint, but it costs you.</p>
+        <h3>Modes</h3>
+        <p>Solo, 1v1 face-off, or friend group over a set number of rounds.</p>`,
+    football: `
+        <h2>Team Manager</h2>
+        <p>Draft a squad on a &pound;100m budget, pick your formation and tactics, then take on the computer or a friend. Team selection and tactics decide the result, not luck.</p>
+        <h3>Building your team</h3>
+        <p>Tap any player to open the market. Search by name or club, and filter by club, star rating, or price. Stay under budget, choose a formation, and set a tactic: attacking, balanced, defensive, press, or park the bus.</p>
+        <h3>The match</h3>
+        <p>Watch it play out on the 2D pitch with live commentary. At half-time you can make up to three substitutions and switch tactic. Use Skip or 2x to speed things up.</p>
+        <h3>Modes</h3>
+        <p><b>Quick match</b> against the computer, <b>Cup run</b> (a knockout against rising difficulty), <b>1v1</b> online, and a <b>friend mini-league</b> where everyone drafts and plays a round-robin for the title.</p>
+        <h3>Global league</h3>
+        <p>Ranked results move your Manager Rating up or down. Beat tougher opponents to climb the tiers, from Sunday League up to World Class.</p>`
 };
 
 // =========================================================================
@@ -7817,6 +7846,16 @@ async function fbDraft() {
 }
 
 function fbRenderSquad() {
+    const sqBack = document.querySelector('#screen-football-squad .back-link');
+    if (sqBack) {
+        if (FB.mode === 'mp') {
+            sqBack.textContent = '\u2190 Leave match';
+            sqBack.onclick = (e) => { if (e) e.preventDefault(); try { soundClick(); } catch (er) {} fbLeaveMp(); };
+        } else {
+            sqBack.textContent = '\u2190 Back';
+            sqBack.onclick = (e) => { if (e) e.preventDefault(); try { soundClick(); } catch (er) {} showScreen('screen-football-setup'); };
+        }
+    }
     $('fb-squad-formation').textContent = FB.formation;
     $('fb-budget-total').textContent = '$' + FB.budget + 'm';
     fbRenderBudget();
@@ -7903,31 +7942,83 @@ function fbRenderBench() {
     });
 }
 
+function fbStars(rating) {
+    if (rating >= 88) return 5;
+    if (rating >= 80) return 4;
+    if (rating >= 72) return 3;
+    if (rating >= 64) return 2;
+    return 1;
+}
+
 function fbOpenTransfer(player, isBench) {
     FB.transferTarget = { player, isBench };
     $('fb-sheet-title').textContent = 'Replace ' + player.short;
+    const left = Math.round((FB.budget - fbCost()) * 10) / 10;
+    $('fb-sheet-sub').textContent = player.pos + ' \u00b7 \u00a3' + left.toFixed(1) + 'm in the bank';
+    const inSquad = new Set(FB.starting.concat(FB.benchPlayers).map(p => p.id));
+    const clubs = Array.from(new Set(FB.pool
+        .filter(p => p.pos === player.pos && !inSquad.has(p.id))
+        .map(p => p.club).filter(Boolean))).sort();
+    const clubSel = $('fb-sheet-club');
+    if (clubSel) clubSel.innerHTML = '<option value="">All clubs</option>' +
+        clubs.map(c => '<option value="' + fbEsc(c) + '">' + fbEsc(c) + '</option>').join('');
+    const sv = $('fb-sheet-search'); if (sv) sv.value = '';
+    const st = $('fb-sheet-stars'); if (st) st.value = '0';
+    const pr = $('fb-sheet-price'); if (pr) pr.value = '';
+    const so = $('fb-sheet-sort'); if (so) so.value = 'rating';
+    const filters = $('fb-sheet-filters'); if (filters) filters.classList.remove('hidden');
+    fbRenderSheetList();
+    $('fb-transfer-sheet').classList.remove('hidden');
+}
+
+function fbRenderSheetList() {
+    const t = FB.transferTarget;
+    if (!t) return;
+    const player = t.player;
     const inSquad = new Set(FB.starting.concat(FB.benchPlayers).map(p => p.id));
     const currentCost = fbCost();
-    const left = Math.round((FB.budget - currentCost) * 10) / 10;
-    $('fb-sheet-sub').textContent = player.pos + ' · $' + left.toFixed(1) + 'm in the bank';
-    const cands = FB.pool.filter(p => p.pos === player.pos && !inSquad.has(p.id))
-        .sort((a, b) => b.rating - a.rating);
+    const q = (($('fb-sheet-search') || {}).value || '').trim().toLowerCase();
+    const club = ($('fb-sheet-club') || {}).value || '';
+    const minStars = parseInt(($('fb-sheet-stars') || {}).value, 10) || 0;
+    const priceF = ($('fb-sheet-price') || {}).value || '';
+    const sort = ($('fb-sheet-sort') || {}).value || 'rating';
+    let cands = FB.pool.filter(p => p.pos === player.pos && !inSquad.has(p.id));
+    if (q) cands = cands.filter(p =>
+        (p.name && p.name.toLowerCase().includes(q)) ||
+        (p.short && p.short.toLowerCase().includes(q)) ||
+        (p.club && p.club.toLowerCase().includes(q)));
+    if (club) cands = cands.filter(p => p.club === club);
+    if (minStars) cands = cands.filter(p => fbStars(p.rating) >= minStars);
+    if (priceF === 'aff') cands = cands.filter(p => (currentCost - player.price + p.price) <= FB.budget + 0.001);
+    else if (priceF) { const cap = parseFloat(priceF); cands = cands.filter(p => p.price <= cap + 0.001); }
+    if (sort === 'price-lo') cands.sort((a, b) => a.price - b.price || b.rating - a.rating);
+    else if (sort === 'price-hi') cands.sort((a, b) => b.price - a.price || b.rating - a.rating);
+    else if (sort === 'name') cands.sort((a, b) => (a.short || '').localeCompare(b.short || ''));
+    else cands.sort((a, b) => b.rating - a.rating || a.price - b.price);
+    const total = cands.length;
+    const CAP = 80;
     const list = $('fb-sheet-list');
     list.innerHTML = '';
-    cands.forEach(c => {
+    cands.slice(0, CAP).forEach(c => {
         const newCost = currentCost - player.price + c.price;
         const afford = newCost <= FB.budget + 0.001;
         const row = document.createElement('div');
         row.className = 'fb-sheet-row' + (afford ? '' : ' unaffordable');
-        row.innerHTML = '<span class="fb-sr-name">' + fbEsc(c.short) +
-            ' <span class="fb-sr-club">' + fbEsc(c.club) + '</span></span>' +
+        row.innerHTML = '<span class="fb-sr-name"><span class="fb-sr-pname">' + fbEsc(c.short || c.name) + '</span>' +
+            '<span class="fb-sr-meta"><span class="fb-sr-stars">' + '\u2605'.repeat(fbStars(c.rating)) + '</span>' +
+            '<span class="fb-sr-club">' + fbEsc(c.club || '') + '</span></span></span>' +
             '<span class="fb-sr-ovr">' + c.rating + '</span>' +
-            '<span class="fb-sr-price">$' + c.price.toFixed(1) + 'm</span>';
+            '<span class="fb-sr-price">\u00a3' + c.price.toFixed(1) + 'm</span>';
         if (afford) row.onclick = () => fbDoTransfer(player, c);
-        else row.onclick = () => toast('Not enough budget for ' + c.short);
+        else row.onclick = () => toast('Not enough budget for ' + (c.short || c.name));
         list.appendChild(row);
     });
-    $('fb-transfer-sheet').classList.remove('hidden');
+    const countEl = $('fb-sheet-count');
+    if (countEl) {
+        if (total === 0) countEl.textContent = 'No players match. Try clearing a filter.';
+        else if (total > CAP) countEl.textContent = 'Showing top ' + CAP + ' of ' + total + ' \u00b7 search or filter to narrow';
+        else countEl.textContent = total + ' player' + (total === 1 ? '' : 's');
+    }
 }
 
 function fbDoTransfer(outP, inP) {
@@ -8236,6 +8327,7 @@ function fbHtPickStarter(benchP) {
     if (FB.htSubsUsed >= 3) { toast('No substitutions left'); return; }
     $('fb-sheet-title').textContent = 'Bring on ' + benchP.short;
     $('fb-sheet-sub').textContent = 'Replace which ' + benchP.pos + '?';
+    const filters = $('fb-sheet-filters'); if (filters) filters.classList.add('hidden');
     const starters = FB.htStarting.filter(p => p.pos === benchP.pos);
     const list = $('fb-sheet-list');
     list.innerHTML = '';
@@ -8538,10 +8630,56 @@ function renderFbMpMatch(s) {
     if (FB._mpResultShown && FB._mpLastResultId === res.result_id) return;
     FB._mpResultShown = true;
     FB._mpLastResultId = res.result_id;
+    if (res.forfeit) { fbMpForfeit(res, s); return; }
     if (res.mode === 'group') { renderFbGroupResult(res, s); return; }
     const mySid = (s.me && s.me.sid) || State.mySid;
     const mySide = (res.home_sid === mySid) ? 'home' : 'away';
     fbMpReplay(res, mySide);
+}
+
+function fbMpForfeit(res, s) {
+    if (FB._matchTimer) { try { cancelAnimationFrame(FB._matchTimer); } catch (e) {} FB._matchTimer = null; }
+    fbPitchAmbientStop();
+    const mySid = (s.me && s.me.sid) || State.mySid;
+    const iWon = (res.home_sid === mySid);
+    const myName = iWon ? res.home_name : res.away_name;
+    const oppName = iWon ? res.away_name : res.home_name;
+    const myScore = iWon ? res.home_score : res.away_score;
+    const oppScore = iWon ? res.away_score : res.home_score;
+    $('fb-you-name').textContent = myName || 'You';
+    $('fb-cpu-name').textContent = oppName || 'Opponent';
+    const yc = $('fb-you-crest'); if (yc) yc.textContent = fbInitials(myName || 'You');
+    const cc = $('fb-cpu-crest'); if (cc) cc.textContent = fbInitials(oppName || 'Opp');
+    const yv = $('fb-you-val'); if (yv) yv.textContent = '';
+    const cv = $('fb-cpu-val'); if (cv) cv.textContent = '';
+    $('fb-score').textContent = myScore + '-' + oppScore;
+    $('fb-clock').textContent = 'FT';
+    $('fb-feed').innerHTML = '';
+    $('fb-poss-fill').style.width = '50%';
+    $('fb-poss-you').textContent = '50%'; $('fb-poss-cpu').textContent = '50%';
+    $('fb-ht-panel').classList.add('hidden');
+    const ft = $('fb-ft-panel'); if (ft) ft.classList.remove('hidden');
+    $('fb-ft-outcome').textContent = iWon ? 'You win 3-0' : 'Match abandoned';
+    let reward = (oppName || 'Your opponent') + ' left the match.';
+    if (iWon) {
+        reward += ' Walkover, ' + myScore + '-' + oppScore + '.';
+        if (typeof res.home_delta === 'number')
+            reward += ' Manager Rating ' + res.home_rating + (res.home_delta >= 0 ? ' +' : ' ') + res.home_delta + '.';
+    }
+    $('fb-ft-reward').textContent = reward;
+    $('fb-ft-stats').innerHTML = '';
+    const pa = $('fb-playagain'); if (pa) pa.classList.add('hidden');   // opponent gone, no rematch
+    const ftl = $('fb-ft-league'); if (ftl) { ftl.classList.remove('hidden'); ftl.textContent = 'View global league'; }
+    showScreen('screen-football-match');
+    try { iWon ? soundWin() : soundClick(); } catch (e) {}
+}
+
+function fbLeaveMp() {
+    FB._inMp = false; FB._mpReady = false; FB._mpDrafted = false; FB._mpDrafting = false;
+    if (FB._matchTimer) { try { cancelAnimationFrame(FB._matchTimer); } catch (e) {} FB._matchTimer = null; }
+    fbPitchAmbientStop();
+    leaveCurrentRoomIfAny();
+    showScreen('screen-home');
 }
 
 function renderFbGroupResult(res, s) {
@@ -8652,6 +8790,7 @@ function fbMpShowResult() {
     $('fb-ft-league').classList.add('hidden');
     const playBtn = $('fb-playagain');
     if (playBtn) {
+        playBtn.classList.remove('hidden');
         playBtn.textContent = 'Rematch';
         playBtn.disabled = false;
         playBtn.onclick = () => { try { soundClick(); } catch (e) {} socket.emit('football_rematch'); };
@@ -8687,6 +8826,46 @@ function wireFootball() {
     if (second) second.onclick = () => { try { soundClick(); } catch (e) {} fbSecondHalf(); };
     const sclose = $('fb-sheet-close');
     if (sclose) sclose.onclick = () => $('fb-transfer-sheet').classList.add('hidden');
+    const sheetSearch = $('fb-sheet-search');
+    if (sheetSearch) sheetSearch.oninput = () => fbRenderSheetList();
+    ['fb-sheet-club', 'fb-sheet-stars', 'fb-sheet-price', 'fb-sheet-sort'].forEach(id => {
+        const el = $(id);
+        if (el) el.onchange = () => fbRenderSheetList();
+    });
+    document.querySelectorAll('.fb-settings-tab').forEach(btn => {
+        btn.onclick = () => {
+            try { soundClick(); } catch (e) {}
+            const inp = $('fb-mgr-name'); if (inp) inp.value = State.myName || '';
+            const msg = $('fb-mgr-msg'); if (msg) msg.textContent = '';
+            $('fb-settings-sheet').classList.remove('hidden');
+        };
+    });
+    const setClose = $('fb-settings-close');
+    if (setClose) setClose.onclick = () => $('fb-settings-sheet').classList.add('hidden');
+    const mgrSave = $('fb-mgr-save');
+    if (mgrSave) mgrSave.onclick = async () => {
+        const inp = $('fb-mgr-name');
+        const msg = $('fb-mgr-msg');
+        const newName = (inp ? inp.value : '').trim();
+        if (!newName) { if (msg) msg.textContent = 'Name cannot be empty'; return; }
+        if (newName.length > 20) { if (msg) msg.textContent = 'Name must be 20 characters or fewer'; return; }
+        if (!State.myUserId) { if (msg) msg.textContent = 'Set your name on the home screen first'; return; }
+        try { soundClick(); } catch (e) {}
+        try {
+            const r = await fetch('/api/profile/rename', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: State.myUserId, new_name: newName })
+            });
+            const d = await r.json();
+            if (!r.ok || !d.ok) { if (msg) msg.textContent = (d && d.msg) || 'Could not save'; return; }
+            State.myName = d.name || newName;
+            try { localStorage.setItem('gameroom_name', State.myName); } catch (e) {}
+            try { socket.emit('hello', { user_id: State.myUserId, name: State.myName }); } catch (e) {}
+            if (msg) msg.textContent = 'Saved';
+            toast('Manager name updated');
+            setTimeout(() => $('fb-settings-sheet').classList.add('hidden'), 500);
+        } catch (e) { if (msg) msg.textContent = 'Could not save'; }
+    };
     const sheet = $('fb-transfer-sheet');
     if (sheet) sheet.onclick = e => { if (e.target === sheet) sheet.classList.add('hidden'); };
     const again = $('fb-playagain');

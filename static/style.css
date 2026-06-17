@@ -329,7 +329,8 @@ body[data-theme="bold"] .btn-small { background: var(--text); color: var(--accen
 .segmented { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
 .seg-btn {
     flex: 1;
-    min-width: 60px;
+    min-width: max-content;
+    white-space: nowrap;
     padding: 11px 8px;
     background: var(--bg);
     color: var(--text);
@@ -3961,12 +3962,12 @@ body[data-theme="bold"] #home-profile-card .streak-lab { color: rgba(0,0,0,0.6) 
 
 /* ---- Football Play / Global League tabs ---- */
 .fb-tabs{display:flex;gap:4px;background:var(--gray-100);border-radius:10px;padding:4px;margin:6px 0 14px}
-.fb-tab{flex:1;border:none;background:none;padding:9px 6px;border-radius:7px;font-size:14px;font-weight:700;color:var(--muted);cursor:pointer}
+.fb-tab{flex:1;border:none;background:none;padding:9px 6px;border-radius:7px;font-size:14px;font-weight:700;color:var(--muted);cursor:pointer;white-space:nowrap}
 .fb-tab.active{background:var(--bg);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 
 /* ---- 2D match pitch ---- */
 .fb-pitch-wrap{position:relative;margin:10px 0 4px;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.18)}
-#fb-pitch{display:block;width:100%;height:auto}
+#fb-match-pitch{display:block;width:100%;height:auto}
 #fb-pitch-stripes rect:nth-child(odd){fill:rgba(255,255,255,.04)}
 .fb-pitch-dot{transition:none;transform-box:fill-box;transform-origin:center}
 .fb-pitch-ball-anim{transition:cx .35s linear, cy .35s linear}
@@ -3980,3 +3981,22 @@ body[data-theme="bold"] #home-profile-card .streak-lab { color: rgba(0,0,0,0.6) 
 .fb-feed-item.ambient{opacity:.7}
 .fb-feed-item.ambient .fb-ico{opacity:.5}
 .fb-team-val{font-size:11px;color:var(--muted);font-weight:700;margin-top:1px}
+
+/* ---- narrow-phone polish for football controls ---- */
+@media (max-width: 430px) {
+    .seg-btn { font-size: 13px; padding: 10px 8px; }
+    .fb-tab { font-size: 13px; }
+    .fb-team { width: 76px; }
+    .fb-grp-head, .fb-grp-row { font-size: 12px; }
+}
+
+/* ---- transfer sheet search + filters ---- */
+.fb-sheet-filters{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+.fb-sheet-search{width:100%;padding:11px 12px;border:1.5px solid var(--gray-200);border-radius:10px;font-size:15px;background:var(--bg);color:var(--text);box-sizing:border-box}
+.fb-sheet-search:focus{outline:none;border-color:var(--accent)}
+.fb-sheet-filter-row{display:flex;gap:6px;flex-wrap:wrap}
+.fb-sheet-sel{flex:1 1 auto;min-width:max-content;padding:9px 8px;border:1.5px solid var(--gray-200);border-radius:9px;font-size:13px;font-weight:600;background:var(--bg);color:var(--text)}
+.fb-sheet-count{font-size:12px;color:var(--muted)}
+.fb-sheet-row .fb-sr-name{display:flex;flex-direction:column;gap:2px}
+.fb-sr-meta{display:flex;align-items:center;gap:6px}
+.fb-sr-stars{color:#f0a020;font-size:11px;letter-spacing:1px;white-space:nowrap}

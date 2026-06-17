@@ -275,6 +275,14 @@
         </div>
         <div id="fbsquad-msg" class="msg"></div>
       </div>
+
+      <div class="card">
+        <h2>Global league</h2>
+        <p class="hint">The global Manager Rating table. Reset wipes it completely. Use this to clear leftover demo or synthetic managers from older builds; it then refills with real players only as matches are played.</p>
+        <div id="fbleague-status" class="msg"></div>
+        <button class="btn btn-danger" id="fbleague-reset">Reset global league</button>
+        <div id="fbleague-msg" class="msg"></div>
+      </div>
     </section>
 
     <!-- GEOGRAPHY -->
@@ -570,9 +578,28 @@ if($('fbsquad-upload')){
   };
 }
 
+async function fbLeagueStatus(){
+  try{
+    const {data} = await api('/api/admin/football/league');
+    if(data && data.ok){
+      $('fbleague-status').className = 'msg ok';
+      $('fbleague-status').textContent = `${data.managers} managers on the global table`;
+    }
+  }catch(e){}
+}
+if($('fbleague-reset')){
+  $('fbleague-reset').onclick = async ()=>{
+    if(!confirm('Wipe the entire global league? This clears all managers and ratings and cannot be undone.')) return;
+    const {status,data} = await api('/api/admin/football/league/reset',{method:'POST'});
+    if(status===200 && data.ok){ flash($('fbleague-msg'),'Global league cleared',true); fbLeagueStatus(); }
+    else { flash($('fbleague-msg'), (data&&data.msg)||(data&&data.error)||'Reset failed', false); }
+  };
+}
+
 // ---------- load everything ----------
 async function loadAll(){
   fbSquadStatus();
+  fbLeagueStatus();
   const kinds = ['trivia','pictionary','footy','geo_flag','geo_landmark'];
   const results = {};
   for(const k of kinds){
