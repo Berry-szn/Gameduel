@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#ffffff">
     <title>GameRoom</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=37">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=39">
     <!-- Google Identity Services (Sign in with Google). Loaded async; the
          client wires it up once /api/public/config returns the client id. -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -94,17 +94,6 @@
                     <span class="profile-mini-stat"><b id="profile-wins">0</b> wins</span>
                     <span class="profile-mini-stat profile-mini-stat-loss"><b id="profile-losses">0</b> losses</span>
                     <span class="profile-mini-stat"><b id="profile-streak-count">0</b> 🔥 streak</span>
-                </div>
-                <!-- Google sign-in / signed-in status -->
-                <div class="profile-auth-row" id="profile-auth-row">
-                    <div id="google-signin-wrap" class="hidden">
-                        <div class="auth-hint">Sign in to save your progress across devices</div>
-                        <div id="google-signin-btn"></div>
-                    </div>
-                    <div id="signed-in-wrap" class="hidden">
-                        <span class="signed-in-text">Signed in as <b id="signed-in-email">—</b></span>
-                        <button id="sign-out-btn" class="btn-text-link">Sign out</button>
-                    </div>
                 </div>
             </div>
 
@@ -222,6 +211,17 @@
                         </div>
                         <div class="game-card-title">Pictionary</div>
                         <div class="game-card-desc">Crack the emoji riddle — guess the word or phrase. Hints available. Solo, face-off, group.</div>
+                    </button>
+                    <button class="game-card" data-game="football">
+                        <div class="game-card-art game-art-football">
+                            <span class="fb-card-pitch">
+                                <span class="fb-card-ball">⚽</span>
+                            </span>
+                        </div>
+                        <div class="game-card-title">Team Manager
+                            <span class="game-card-badge">NEW</span>
+                        </div>
+                        <div class="game-card-desc">Draft a squad, manage the budget, pick tactics, beat the computer. Skill over luck.</div>
                     </button>
                 </div>
             </div>
@@ -1529,6 +1529,143 @@
         </div>
     </section>
 
+    <!-- ===================== TEAM MANAGER ===================== -->
+    <section id="screen-football-setup" class="screen">
+        <div class="card">
+            <button class="back-link" data-back="screen-home">&larr; Back</button>
+            <div class="muted small center">Team Manager</div>
+            <h1 class="center">Build your team</h1>
+            <p class="muted">Draft a squad on a budget, pick your shape and tactics, then take on the computer. Team selection and tactics decide the result, not luck.</p>
+
+            <label>Difficulty</label>
+            <div class="mode-grid" id="fb-diff-list">
+                <button class="mode-card active" data-fbdiff="easy">
+                    <div class="mode-title">Easy</div>
+                    <div class="mode-desc">Sunday League XI</div>
+                </button>
+                <button class="mode-card" data-fbdiff="medium">
+                    <div class="mode-title">Medium</div>
+                    <div class="mode-desc">City Rivals</div>
+                </button>
+                <button class="mode-card" data-fbdiff="hard">
+                    <div class="mode-title">Hard</div>
+                    <div class="mode-desc">The Galacticos</div>
+                </button>
+            </div>
+
+            <label>Formation</label>
+            <div class="segmented" id="fb-setup-formations"></div>
+
+            <button id="fb-draft-btn" class="btn btn-primary btn-block">Quick match</button>
+            <button id="fb-cup-btn" class="btn btn-secondary btn-block">Cup run (knockout)</button>
+            <button id="fb-view-league" class="btn btn-secondary btn-block">View global league</button>
+        </div>
+    </section>
+
+    <section id="screen-football-squad" class="screen">
+        <div class="card">
+            <button class="back-link" data-back="screen-football-setup">&larr; Back</button>
+            <div class="fb-squad-head">
+                <h1>Your squad</h1>
+                <span class="fb-formation-pill" id="fb-squad-formation">4-3-3</span>
+            </div>
+            <div class="fb-cup-banner hidden" id="fb-cup-banner"></div>
+
+            <div class="fb-budget-row">
+                <span class="muted small">Budget used</span>
+                <span class="small"><b id="fb-budget-spent">$0m</b> of <span id="fb-budget-total">$200m</span></span>
+            </div>
+            <div class="fb-budget-bar"><div class="fb-budget-fill" id="fb-budget-fill"></div></div>
+            <div class="fb-budget-foot"><span id="fb-budget-left">$0m left</span><span id="fb-squad-rating">OVR 0</span></div>
+
+            <div class="fb-pitch" id="fb-pitch"></div>
+
+            <label>Substitutes</label>
+            <div class="fb-bench-row" id="fb-bench"></div>
+
+            <label>Tactic</label>
+            <div class="segmented" id="fb-tactic-chips"></div>
+
+            <div class="button-row">
+                <button id="fb-reshuffle" class="btn btn-secondary">Reshuffle</button>
+                <button id="fb-kickoff" class="btn btn-primary">Kick off</button>
+            </div>
+        </div>
+    </section>
+
+    <section id="screen-football-match" class="screen">
+        <div class="card">
+            <div class="fb-scorebar">
+                <div class="fb-team">
+                    <div class="fb-crest fb-crest-you" id="fb-you-crest">YOU</div>
+                    <div class="small" id="fb-you-name">Your XI</div>
+                </div>
+                <div class="fb-score-mid">
+                    <div class="fb-score" id="fb-score">0-0</div>
+                    <div class="fb-clock" id="fb-clock">0'</div>
+                </div>
+                <div class="fb-team">
+                    <div class="fb-crest fb-crest-cpu" id="fb-cpu-crest">CPU</div>
+                    <div class="small" id="fb-cpu-name">Rivals</div>
+                </div>
+            </div>
+
+            <div class="fb-poss-row"><span id="fb-poss-you">50%</span><span class="muted small">Possession</span><span id="fb-poss-cpu">50%</span></div>
+            <div class="fb-poss-bar"><div class="fb-poss-fill" id="fb-poss-fill"></div></div>
+
+            <div class="fb-feed" id="fb-feed"></div>
+
+            <div class="fb-ht-panel hidden" id="fb-ht-panel">
+                <div class="fb-ht-title">Half time</div>
+                <div class="muted small center" id="fb-ht-score">0-0</div>
+                <label>Substitutions <span id="fb-ht-subs-left">(3 left)</span></label>
+                <p class="muted small" id="fb-ht-hint">Tap a substitute to bring them on for a player in the same position.</p>
+                <div class="fb-bench-row" id="fb-ht-bench"></div>
+                <label>Tactic</label>
+                <div class="segmented" id="fb-ht-tactic"></div>
+                <button id="fb-secondhalf" class="btn btn-primary btn-block">Play second half</button>
+            </div>
+
+            <div class="fb-ft-panel hidden" id="fb-ft-panel">
+                <div class="fb-ft-outcome" id="fb-ft-outcome">Full time</div>
+                <div class="muted small center" id="fb-ft-reward"></div>
+                <div class="fb-ft-stats" id="fb-ft-stats"></div>
+                <button class="fb-link-btn hidden" id="fb-ft-league"></button>
+                <div class="button-row">
+                    <button id="fb-playagain" class="btn btn-secondary">Play again</button>
+                    <button id="fb-match-home" class="btn btn-primary" data-back="screen-home">Home</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <div id="fb-transfer-sheet" class="fb-sheet hidden">
+        <div class="fb-sheet-card">
+            <div class="fb-sheet-head">
+                <span id="fb-sheet-title">Transfer</span>
+                <button class="fb-sheet-close" id="fb-sheet-close">&times;</button>
+            </div>
+            <div class="muted small" id="fb-sheet-sub"></div>
+            <div class="fb-sheet-list" id="fb-sheet-list"></div>
+        </div>
+    </div>
+
+    <section id="screen-football-league" class="screen">
+        <div class="card">
+            <button class="back-link" id="fb-league-back">&larr; Back</button>
+            <h1 class="center">Global league</h1>
+            <p class="muted small center">Every ranked match counts. The table never resets.</p>
+            <div class="fb-league-head">
+                <span class="fb-lg-pos">#</span>
+                <span class="fb-lg-name">Manager</span>
+                <span>P</span><span>W</span><span>D</span><span>L</span>
+                <span class="fb-lg-pts">Pts</span>
+            </div>
+            <div id="fb-league-rows"></div>
+            <div id="fb-league-you" class="fb-league-row you fb-league-you hidden"></div>
+        </div>
+    </section>
+
     <!-- OVERLAYS -->
     <div id="crack-overlay" class="overlay hidden">
         <div class="crack-content">
@@ -1562,6 +1699,18 @@
                 <div class="menu-title">Menu</div>
                 <button class="menu-close" data-close="menu-overlay">&times;</button>
             </div>
+            <!-- Account / Google sign-in (moved here from the home screen) -->
+            <div class="menu-account" id="menu-account">
+                <div id="google-signin-wrap" class="hidden">
+                    <div class="auth-hint">Sign in to save your progress across devices</div>
+                    <div id="google-signin-btn"></div>
+                </div>
+                <div id="signed-in-wrap" class="hidden">
+                    <span class="signed-in-text">Signed in as <b id="signed-in-email">—</b></span>
+                    <button id="sign-out-btn" class="btn-text-link">Sign out</button>
+                </div>
+            </div>
+            <div class="menu-divider"></div>
             <button id="menu-pause" class="menu-item">
                 <span class="menu-item-icon">II</span>
                 <span class="menu-item-label">Pause game</span>
@@ -1612,6 +1761,11 @@
             <button id="menu-about" class="menu-item">
                 <span class="menu-item-icon">i</span>
                 <span class="menu-item-label">About</span>
+            </button>
+            <div class="menu-divider"></div>
+            <button id="menu-logout" class="menu-item menu-item-danger">
+                <span class="menu-item-icon">&#9211;</span>
+                <span class="menu-item-label">Log out</span>
             </button>
         </div>
     </div>
@@ -1876,6 +2030,6 @@
         window.INITIAL_MATCH_CODE = "{{ match_code or '' }}";
     </script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="{{ url_for('static', filename='app.js') }}?v=37"></script>
+    <script src="{{ url_for('static', filename='app.js') }}?v=39"></script>
 </body>
 </html>

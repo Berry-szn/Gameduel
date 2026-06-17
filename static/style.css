@@ -3304,15 +3304,34 @@ main {
     color: #6b7280 !important;
 }
 
-/* Home profile card surface */
-#home-profile-card,
-#home-profile-card * {
-    color: #0f0f10;
+/* Home profile card — dark surface with light text + lemon accents.
+   Replaces the v27 attempt that forced text dark but couldn't override the
+   gradient background (background-color can't beat a gradient background-image),
+   which left dark-on-dark invisible text. */
+#home-profile-card {
+    background: linear-gradient(135deg, #0f0f10 0%, #1a1a1c 100%) !important;
 }
-#home-profile-card { background-color: #ffffff !important; }
+#home-profile-card,
+#home-profile-card * { color: #ffffff !important; }
+#home-profile-card .profile-welcome-hi,
 #home-profile-card .muted,
 #home-profile-card .muted.small,
-#home-profile-card .profile-title { color: #6b7280 !important; }
+#home-profile-card .profile-title,
+#home-profile-card .streak-lab { color: rgba(255,255,255,0.72) !important; }
+#home-profile-card .profile-level,
+#home-profile-card .streak-num { color: var(--accent) !important; }
+#home-profile-card .profile-mini-stat-loss b { color: #ff7066 !important; }
+#home-profile-card .profile-avatar { color: #0f0f10 !important; }  /* dark letter on lemon avatar */
+
+/* Bold theme: the card is lemon, so text goes dark */
+body[data-theme="bold"] #home-profile-card {
+    background: var(--accent) !important;
+}
+body[data-theme="bold"] #home-profile-card,
+body[data-theme="bold"] #home-profile-card * { color: #0f0f10 !important; }
+body[data-theme="bold"] #home-profile-card .profile-welcome-hi,
+body[data-theme="bold"] #home-profile-card .profile-title,
+body[data-theme="bold"] #home-profile-card .streak-lab { color: rgba(0,0,0,0.6) !important; }
 
 /* ============================================================
    HALFIT — slicing game UI
@@ -3808,3 +3827,118 @@ main {
     margin-bottom: 10px;
     min-height: 44px;
 }
+
+/* Account block at the top of the slide-out menu */
+.menu-account {
+    padding: 4px 4px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+}
+.menu-account .auth-hint {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 4px;
+}
+.menu-account .signed-in-text { font-size: 13px; }
+
+
+/* ===================== TEAM MANAGER (native light theme) ===================== */
+.game-art-football{background:var(--accent-soft);display:flex;align-items:center;justify-content:center}
+.fb-card-ball{font-size:30px}
+.btn-block{display:block;width:100%;margin-top:12px}
+
+.fb-squad-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.fb-squad-head h1{margin:0}
+.fb-formation-pill{background:var(--text);color:var(--bg);font-size:12px;font-weight:700;padding:4px 11px;border-radius:99px}
+
+.fb-budget-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px}
+.fb-budget-row b{font-weight:700}
+.fb-budget-bar{height:8px;background:var(--gray-100);border-radius:99px;overflow:hidden}
+.fb-budget-fill{height:100%;background:var(--accent);width:0;border-radius:99px;transition:width .25s}
+.fb-budget-fill.over{background:var(--danger)}
+.fb-budget-foot{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:4px;font-weight:600}
+
+.fb-pitch{background:#2e9e54;border-radius:12px;padding:14px 6px;margin:14px 0 6px;position:relative;overflow:hidden}
+.fb-pitch::before{content:"";position:absolute;left:0;right:0;top:50%;height:1px;background:rgba(255,255,255,.35)}
+.fb-pitch::after{content:"";position:absolute;left:50%;top:50%;width:50px;height:50px;border:1px solid rgba(255,255,255,.35);border-radius:50%;transform:translate(-50%,-50%)}
+.fb-row{display:flex;justify-content:space-around;align-items:flex-start;margin:9px 0;position:relative;z-index:1}
+.fb-chip{display:flex;flex-direction:column;align-items:center;width:70px;background:none;border:none;padding:0;cursor:pointer}
+.fb-jersey{width:36px;height:36px;border-radius:50%;background:#fff;color:var(--text);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.fb-chip.star .fb-jersey{background:var(--accent)}
+.fb-chip .fb-name{font-size:12px;color:#fff;font-weight:600;margin-top:4px;text-align:center;text-shadow:0 1px 2px rgba(0,0,0,.45)}
+.fb-chip .fb-price{font-size:11px;color:#eaffa6;font-weight:700;text-shadow:0 1px 2px rgba(0,0,0,.4)}
+
+.fb-bench-row{display:flex;gap:6px}
+.fb-bench-chip{flex:1;background:var(--bg);border:1px solid var(--gray-200);border-radius:10px;padding:8px 4px;text-align:center;cursor:pointer}
+.fb-bench-chip .fb-pos{font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:700}
+.fb-bench-chip .fb-name{font-size:12px;font-weight:600}
+.fb-bench-chip .fb-price{font-size:10px;color:var(--muted)}
+
+.fb-scorebar{display:flex;align-items:center;justify-content:center;gap:14px;margin-bottom:14px}
+.fb-team{text-align:center;width:84px}
+.fb-crest{width:46px;height:46px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;margin:0 auto 5px}
+.fb-crest-you{background:var(--accent);color:var(--text)}
+.fb-crest-cpu{background:var(--gray-100);color:var(--text)}
+.fb-score-mid{text-align:center;min-width:90px}
+.fb-score{font-size:34px;font-weight:800;letter-spacing:-.02em}
+.fb-clock{font-size:12px;color:var(--muted);margin-top:4px;font-weight:600}
+.fb-poss-row{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:4px}
+.fb-poss-bar{height:6px;border-radius:99px;overflow:hidden;background:var(--gray-100)}
+.fb-poss-fill{height:100%;background:var(--accent);width:50%;transition:width .4s}
+
+.fb-feed{margin-top:16px;min-height:120px}
+.fb-feed-item{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--gray-100);animation:fbFeedIn .25s ease}
+.fb-feed-item .fb-min{font-size:12px;color:var(--muted);width:32px;font-weight:700;flex-shrink:0}
+.fb-feed-item .fb-ico{font-size:15px;width:18px;text-align:center;flex-shrink:0}
+.fb-feed-item .fb-txt{font-size:14px;flex:1}
+.fb-feed-item .fb-dim{color:var(--muted)}
+.fb-feed-item.goal{background:var(--accent-soft);border-radius:8px;padding:9px 8px;border-bottom:none;margin:4px 0;font-weight:600}
+.fb-feed-divider{text-align:center;font-size:12px;color:var(--muted);margin:9px 0;font-weight:600}
+@keyframes fbFeedIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+
+.fb-ft-panel{margin-top:16px;padding-top:14px;border-top:1px solid var(--gray-100)}
+.fb-ft-outcome{font-size:22px;font-weight:800;text-align:center}
+.fb-ft-outcome.win{color:var(--accent-dark)}
+.fb-ft-outcome.loss{color:var(--danger)}
+.fb-ft-reward{margin-top:6px}
+.fb-ft-stats{display:flex;justify-content:center;gap:18px;font-size:13px;color:var(--muted);margin-top:12px}
+.fb-ft-stats b{color:var(--text)}
+
+.fb-sheet{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;z-index:60}
+.fb-sheet.hidden{display:none}
+.fb-sheet-card{background:var(--bg);border-radius:16px 16px 0 0;width:100%;max-width:480px;max-height:74vh;display:flex;flex-direction:column;padding:16px 14px 22px}
+.fb-sheet-head{display:flex;align-items:center;justify-content:space-between;font-size:17px;font-weight:700}
+.fb-sheet-close{background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer}
+.fb-sheet-list{overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.fb-sheet-row{display:flex;align-items:center;gap:10px;border:1px solid var(--gray-200);border-radius:10px;padding:10px 12px;cursor:pointer}
+.fb-sheet-row.unaffordable{opacity:.45}
+.fb-sheet-row .fb-sr-name{flex:1;font-size:14px;font-weight:600}
+.fb-sheet-row .fb-sr-club{font-size:11px;color:var(--muted);font-weight:400}
+.fb-sheet-row .fb-sr-ovr{font-size:13px;color:var(--muted);width:34px;text-align:center}
+.fb-sheet-row .fb-sr-price{font-size:14px;font-weight:700;width:52px;text-align:right;color:var(--accent-dark)}
+
+.fb-ht-panel{margin-top:16px;padding-top:14px;border-top:1px solid var(--gray-100)}
+.fb-ht-title{font-size:20px;font-weight:800;text-align:center}
+.fb-ht-panel label{margin-top:14px}
+.fb-ht-panel .fb-bench-chip.used{opacity:.4;pointer-events:none}
+.fb-ht-panel .fb-bench-chip.bringon{border-color:var(--accent);background:var(--accent-soft)}
+
+/* ---- Global league table ---- */
+.fb-league-head,.fb-league-row{display:grid;grid-template-columns:26px 1fr 24px 24px 24px 24px 34px;align-items:center;gap:3px;padding:9px 4px}
+.fb-league-head{font-size:11px;color:var(--muted);font-weight:700;border-bottom:1px solid var(--gray-200);text-transform:uppercase}
+.fb-league-head span{text-align:center}
+.fb-league-row{font-size:13px;border-bottom:1px solid var(--gray-100)}
+.fb-league-row span{text-align:center}
+.fb-lg-pos{color:var(--muted);font-weight:700}
+.fb-lg-name{text-align:left!important;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fb-lg-pts{font-weight:700}
+.fb-league-row.you{background:var(--accent-soft);border-radius:8px}
+.fb-league-row.you .fb-lg-pts{color:var(--accent-dark)}
+.fb-lg-tag{font-size:9px;background:var(--text);color:var(--bg);padding:1px 5px;border-radius:99px;font-weight:700}
+.fb-league-you{margin-top:8px;border-top:2px solid var(--gray-200)}
+.fb-link-btn{background:none;border:none;color:var(--accent-dark);font-weight:600;font-size:13px;cursor:pointer;display:block;margin:10px auto 0;text-align:center}
+
+/* ---- Cup banner ---- */
+.fb-cup-banner{background:var(--accent-soft);border:1px solid var(--accent);border-radius:10px;padding:9px 12px;font-size:13px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--accent-dark)}

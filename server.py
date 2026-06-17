@@ -239,7 +239,7 @@ def get_profile(name: str, user_id: str = None) -> dict:
     user_id key the first time we see the user_id for that name.
     """
     with PROFILES_LOCK:
-        if user_id and user_id.startswith('u_'):
+        if user_id and user_id.startswith(('u_', 'g_')):
             uid_key = user_id
             if uid_key in PROFILES_CACHE:
                 p = PROFILES_CACHE[uid_key]
@@ -803,6 +803,7 @@ def build_state_snapshot(state: dict, code: str, for_sid: str) -> dict:
         'pict': pict_public_state(state.get('pict')) if state.get('pict') else None,
         'trivia': trivia_public_state(state.get('trivia'), state['phase']) if state.get('trivia') else None,
         'footy': footy_public_state(state.get('footy'), state['phase']) if state.get('footy') else None,
+        'football_mp': fbmp_public_state(state.get('football_mp')) if state.get('football_mp') else None,
         'match_history': state.get('match_history', [])[-10:],
         'me': {
             'sid': for_sid,
@@ -2245,7 +2246,7 @@ def on_create_room(data=None):
     mode_hint = 'group'
     if data and isinstance(data, dict):
         gt = data.get('game_type')
-        if gt in ('guessduel', 'wordchain', 'timeshot', 'geography', 'halfit', 'angle', 'pictionary', 'trivia', 'footymind'):
+        if gt in ('guessduel', 'wordchain', 'timeshot', 'geography', 'halfit', 'angle', 'pictionary', 'trivia', 'footymind', 'football'):
             game_type = gt
         mh = data.get('mode_hint')
         if mh in ('faceoff', 'group', 'solo'):
@@ -2464,6 +2465,33 @@ def on_start_game(data):
                 'ts_difficulty': difficulty, 'first_to': first_to
             }
             ts_init_room(state, difficulty, first_to)
+            touch_room(room)
+            broadcast_state(state, code)
+            return
+
+        # Football manager 1v1 dispatch
+        if state.get('game_type') == 'football':
+            humans = [p for p in state['players'].values() if not p.get('is_bot')]
+            if len(humans) < 2:
+                emit('error_msg', {'msg': 'Football 1v1 needs two players'})
+                return
+            home_p, away_p = humans[0], humans[1]   # join order: creator is home
+            with SID_TO_USER_LOCK:
+                home_u = dict(SID_TO_USER.get(home_p['sid']) or {})
+                away_u = dict(SID_TO_USER.get(away_p['sid']) or {})
+            state['football_mp'] = {
+                'phase': 'draft',
+                'budget': _fbgame.BUDGET,
+                'home_sid': home_p['sid'],
+                'away_sid': away_p['sid'],
+                'names': {home_p['sid']: home_p['name'], away_p['sid']: away_p['name']},
+                'uids': {home_p['sid']: home_u.get('user_id'), away_p['sid']: away_u.get('user_id')},
+                'submissions': {},
+                'result': None,
+            }
+            state['host_sid'] = home_p['sid']
+            state['phase'] = 'fb_draft'
+            state['last_start_args'] = {'game_type': 'football', 'mode': 'faceoff'}
             touch_room(room)
             broadcast_state(state, code)
             return
@@ -3080,8 +3108,21 @@ def _generic_forfeit_win(room, state, code, leaver_sid, leaver_name,
             'sid': winner_sid, 'name': winner_name,
             'score': state['geo'].get('scores', {}).get(winner_sid, 0),
             'is_bot': False}]
+    elif game_type == 'trivia' and state.get('trivia') is not None:
+        state['trivia']['winners'] = [winner_sid]
+        state['trivia']['final_ranking'] = [{
+            'sid': winner_sid, 'name': winner_name,
+            'score': state['trivia'].get('scores', {}).get(winner_sid, 0),
+            'is_bot': False}]
+    elif game_type == 'footymind' and state.get('footy') is not None:
+        state['footy']['winners'] = [winner_sid]
+        state['footy']['final_ranking'] = [{
+            'sid': winner_sid, 'name': winner_name,
+            'score': state['footy'].get('scores', {}).get(winner_sid, 0),
+            'is_bot': False}]
     _rank_key = {'angle': 'angle', 'halfit': 'halfit', 'pictionary': 'pict',
-                 'timeshot': 'timeshot', 'geography': 'geo'}.get(game_type, '')
+                 'timeshot': 'timeshot', 'geography': 'geo',
+                 'trivia': 'trivia', 'footymind': 'footy'}.get(game_type, '')
     socketio.emit('game_over', {
         'game_type': game_type,
         'winner_sid': winner_sid,
@@ -3120,9 +3161,12 @@ def on_leave_game():
                                               'wc_playing', 'wc_round_intro', 'wc_round_end',
                                               'ts_round', 'ts_round_end',
                                               'geo_round', 'geo_round_end',
+                                              'trivia_round', 'trivia_round_end',
+                                              'footy_round', 'footy_round_end',
                                               'halfit_round', 'halfit_round_end',
                                               'angle_round', 'angle_round_end',
-                                              'pict_round', 'pict_round_end')
+                                              'pict_round', 'pict_round_end',
+                                              'fb_draft', 'fb_match')
             is_faceoff = state.get('mode_hint') == 'faceoff'
 
             # Quit-as-loss: ANY live-game leave costs you a loss + streak reset.
@@ -3226,6 +3270,25 @@ def on_leave_game():
                 end_wordchain_game(room, winner_sid=winner_sid)
                 ended_by_forfeit = True
 
+            # Football 1v1 forfeit: opponent left during draft or the match.
+            # The match result (if both were ready) is already simulated and
+            # recorded server-side, so a mid-replay leave cannot change it; a
+            # leave during drafting simply cancels with no result.
+            if (is_faceoff and in_live_game and len(human_opponents) == 1
+                and state.get('game_type', 'guessduel') == 'football'
+                and not ended_by_forfeit):
+                del state['players'][sid]
+                fbmp = state.get('football_mp')
+                if fbmp and isinstance(fbmp.get('submissions'), dict):
+                    fbmp['submissions'].pop(sid, None)
+                add_activity(state, 'opponent_forfeited', name=name,
+                             winner=human_opponents[0]['name'])
+                socketio.emit('opponent_left', {
+                    'leaver_name': name,
+                    'msg': f'{name} left the match'
+                }, room=code)
+                ended_by_forfeit = True
+
             # TimeShot forfeit: opponent left mid-round
             if (is_faceoff and in_live_game and len(human_opponents) == 1
                 and state.get('game_type', 'guessduel') == 'timeshot'
@@ -3314,10 +3377,10 @@ def on_leave_game():
                 broadcast_state(state, code)
                 ended_by_forfeit = True
 
-            # Newer real-time games (angle / halfit / pictionary) — generic
-            # forfeit-win so the remaining player isn't stranded.
+            # Newer real-time games (angle / halfit / pictionary / trivia /
+            # footymind) — generic forfeit-win so the remaining player isn't stranded.
             if (is_faceoff and in_live_game and len(human_opponents) == 1
-                and state.get('game_type') in ('angle', 'halfit', 'pictionary')
+                and state.get('game_type') in ('angle', 'halfit', 'pictionary', 'trivia', 'footymind')
                 and not ended_by_forfeit):
                 ended_by_forfeit = _generic_forfeit_win(
                     room, state, code, sid, name,
@@ -3848,7 +3911,7 @@ def on_mindmeld_rematch():
 def api_version():
     """Return current build tag. Client polls and reloads if its loaded
     version doesn't match — catches stale browser/edge caches."""
-    return jsonify({'version': 'v37'})
+    return jsonify({'version': 'v39'})
 
 
 def _no_cache_html(resp):
@@ -5653,7 +5716,7 @@ def api_profile_rename():
         return jsonify({'ok': False, 'msg': 'Name cannot be empty'}), 400
     if len(new_name) > 20:
         return jsonify({'ok': False, 'msg': 'Name must be 20 chars or fewer'}), 400
-    if not user_id or not user_id.startswith('u_'):
+    if not user_id or not user_id.startswith(('u_', 'g_')):
         return jsonify({'ok': False, 'msg': 'Missing or invalid user_id'}), 400
 
     # Avatar image safety: only accept reasonably-sized data URLs (< 200KB)
@@ -6362,7 +6425,7 @@ def admin_export():
     content = {k: _admin.list_items(k) for k in _admin.KINDS}
     payload = {
         'exported_at': time.time(),
-        'version': 'v37',
+        'version': 'v39',
         'profiles': profiles,
         'admin_content': content,
         'settings': _admin.get_settings(),
@@ -6608,6 +6671,358 @@ def api_footymind_check():
         'matched': matched,
         'expected': expected
     })
+
+
+# ---- Football manager game (solo vs CPU) ----
+import football_data as _fbdata
+import football_game as _fbgame
+import football_match as _fbmatch
+import football_league as _fbleague
+
+
+def _fb_player_json(p):
+    return {'id': p['id'], 'name': p['name'], 'short': p['short'], 'pos': p['pos'],
+            'rating': p['rating'], 'price': p['price'], 'club': p['club'], 'attrs': p['attrs']}
+
+
+def _fb_load_league():
+    """Load the global table from storage, seeding it once if empty."""
+    s = _storage.kv_get_obj(_fbleague.LEAGUE_KEY, None)
+    if not s:
+        s = _fbleague.seed_standings()
+        try:
+            _storage.kv_set_obj(_fbleague.LEAGUE_KEY, s)
+        except Exception:
+            pass
+    return s
+
+
+def _fb_record_result(uid, name, outcome, gf, ga):
+    """Record a ranked match result into the persistent global league."""
+    if not uid:
+        return None
+    s = _fb_load_league()
+    _fbleague.apply_result(s, uid, name or 'Manager', outcome, gf, ga)
+    try:
+        _storage.kv_set_obj(_fbleague.LEAGUE_KEY, s)
+    except Exception:
+        pass
+    table = _fbleague.ranked_table(s)
+    return next((r for r in table if r['uid'] == uid), None)
+
+
+@app.route('/api/football/new')
+def api_football_new():
+    """Fresh drafted squad + the full player pool (transfer market) + config."""
+    formation = request.args.get('formation', _fbgame.DEFAULT_FORMATION)
+    if formation not in _fbgame.FORMATIONS:
+        formation = _fbgame.DEFAULT_FORMATION
+    squad = _fbgame.draft_squad(formation, _fbgame.BUDGET)
+    return jsonify({
+        'budget': _fbgame.BUDGET,
+        'formations': _fbgame.FORMATIONS,
+        'bench': _fbgame.BENCH,
+        'tactics': list(_fbmatch.TACTICS.keys()),
+        'cpu_levels': list(_fbgame.CPU_META.keys()),
+        'squad': {
+            'formation': squad['formation'],
+            'starting': [_fb_player_json(squad['players'][pid]) for pid in squad['starting']],
+            'bench': [_fb_player_json(squad['players'][pid]) for pid in squad['bench']],
+            'cost': squad['cost'],
+        },
+        'pool': [_fb_player_json(p) for p in _fbdata.get_pool()],
+        'zones': _fbgame.zone_strengths(squad),
+    })
+
+
+@app.route('/api/football/simulate', methods=['POST'])
+def api_football_simulate():
+    """Validate the player's squad, build a CPU opponent at the chosen level,
+    simulate, and return the full result (score + minute-stamped events)."""
+    data = request.get_json(silent=True) or {}
+    sq = data.get('squad') or {}
+    tactic = data.get('tactic', _fbmatch.DEFAULT_TACTIC)
+    if tactic not in _fbmatch.TACTICS:
+        tactic = _fbmatch.DEFAULT_TACTIC
+    cpu_level = data.get('cpu_level', 'medium')
+    if cpu_level not in _fbgame.CPU_META:
+        cpu_level = 'medium'
+
+    squad = {
+        'formation': sq.get('formation', _fbgame.DEFAULT_FORMATION),
+        'starting': list(sq.get('starting', [])),
+        'bench': list(sq.get('bench', [])),
+    }
+    ok, why = _fbgame.validate_squad(squad)
+    if not ok:
+        return jsonify({'ok': False, 'msg': why}), 400
+
+    cpu = _fbgame.build_cpu_squad(cpu_level)
+    m = _fbmatch.simulate_match(
+        squad, cpu, home_tactic=tactic, away_tactic=cpu['tactic'],
+        give_home_edge=True, away_ai=True,
+        home_name='Your XI', away_name=cpu['name'])
+
+    if m['home_score'] > m['away_score']:
+        outcome = 'win'
+    elif m['home_score'] < m['away_score']:
+        outcome = 'loss'
+    else:
+        outcome = 'draw'
+
+    return jsonify({
+        'ok': True,
+        'result': m,
+        'your_zones': _fbgame.zone_strengths(squad),
+        'cpu_zones': _fbgame.zone_strengths(cpu),
+        'cpu_name': cpu['name'],
+        'cpu_tactic': cpu['tactic'],
+        'cpu_formation': cpu['formation'],
+        'outcome': outcome,
+    })
+
+
+@app.route('/api/football/firsthalf', methods=['POST'])
+def api_football_firsthalf():
+    """Play minutes 1-45 and hand back a match_state to resume the second half
+    after the manager's half-time changes."""
+    data = request.get_json(silent=True) or {}
+    sq = data.get('squad') or {}
+    tactic = data.get('tactic', _fbmatch.DEFAULT_TACTIC)
+    if tactic not in _fbmatch.TACTICS:
+        tactic = _fbmatch.DEFAULT_TACTIC
+    cpu_level = data.get('cpu_level', 'medium')
+    if cpu_level not in _fbgame.CPU_META:
+        cpu_level = 'medium'
+
+    squad = {
+        'formation': sq.get('formation', _fbgame.DEFAULT_FORMATION),
+        'starting': list(sq.get('starting', [])),
+        'bench': list(sq.get('bench', [])),
+    }
+    ok, why = _fbgame.validate_squad(squad)
+    if not ok:
+        return jsonify({'ok': False, 'msg': why}), 400
+
+    cpu = _fbgame.build_cpu_squad(cpu_level)
+    seed = random.randint(1, 10_000_000)
+    m = _fbmatch.simulate_match(
+        squad, cpu, home_tactic=tactic, away_tactic=cpu['tactic'],
+        give_home_edge=True, away_ai=True,
+        home_name='Your XI', away_name=cpu['name'],
+        minute_start=1, minute_end=_fbmatch.HALF_MINUTES)
+
+    rs = m.get('resume_state', {})
+    match_state = {
+        'cpu': {'formation': cpu['formation'], 'starting': cpu['starting'],
+                'bench': cpu['bench'], 'name': cpu['name'], 'tactic': cpu['tactic']},
+        'cpu_level': cpu_level,
+        'seed2': random.randint(1, 10_000_000),
+        'resume': rs,
+    }
+    return jsonify({
+        'ok': True,
+        'result': {'events': m['events'], 'home_name': m['home_name'],
+                   'away_name': m['away_name'],
+                   'home_score': m['home_score'], 'away_score': m['away_score']},
+        'cpu_name': cpu['name'],
+        'cpu_tactic': cpu['tactic'],
+        'cpu_formation': cpu['formation'],
+        'your_zones': _fbgame.zone_strengths(squad),
+        'cpu_zones': _fbgame.zone_strengths(cpu),
+        'match_state': match_state,
+    })
+
+
+@app.route('/api/football/secondhalf', methods=['POST'])
+def api_football_secondhalf():
+    """Resume minutes 46-90 with the manager's half-time XI and tactic."""
+    data = request.get_json(silent=True) or {}
+    sq = data.get('squad') or {}
+    tactic = data.get('tactic', _fbmatch.DEFAULT_TACTIC)
+    if tactic not in _fbmatch.TACTICS:
+        tactic = _fbmatch.DEFAULT_TACTIC
+    ms = data.get('match_state') or {}
+    cpu = ms.get('cpu') or {}
+    rs = ms.get('resume') or {}
+
+    formation = sq.get('formation', _fbgame.DEFAULT_FORMATION)
+    starting = list(sq.get('starting', []))
+    ok, why = _fbgame.validate_starting_xi(starting, formation)
+    if not ok:
+        return jsonify({'ok': False, 'msg': why}), 400
+    if not cpu.get('starting') or not rs:
+        return jsonify({'ok': False, 'msg': 'Missing match state'}), 400
+
+    home = {'formation': formation, 'starting': starting, 'bench': []}
+    away = {'formation': cpu.get('formation', '4-3-3'),
+            'starting': list(cpu.get('starting', [])),
+            'bench': list(cpu.get('bench', []))}
+    cpu_name = cpu.get('name', 'Rivals')
+
+    m = _fbmatch.simulate_match(
+        home, away, home_tactic=tactic, away_tactic=cpu.get('tactic', 'balanced'),
+        give_home_edge=True, away_ai=True,
+        home_name='Your XI', away_name=cpu_name,
+        seed=ms.get('seed2'),
+        minute_start=_fbmatch.HALF_MINUTES + 1, minute_end=90,
+        init_hs=rs.get('hs', 0), init_as=rs.get('as', 0),
+        away_start_init=rs.get('away_start'), away_tactic_init=rs.get('away_tactic'),
+        away_subs_made_init=rs.get('away_subs_made', 0),
+        away_bench_init=rs.get('away_bench_avail'),
+        init_shots=rs.get('shots'), init_sot=rs.get('sot'), init_poss=rs.get('poss'))
+
+    if m['home_score'] > m['away_score']:
+        outcome = 'win'
+    elif m['home_score'] < m['away_score']:
+        outcome = 'loss'
+    else:
+        outcome = 'draw'
+
+    # Record into the persistent global league (server-authoritative score).
+    league_you = None
+    if data.get('ranked') and data.get('user_id'):
+        league_you = _fb_record_result(
+            data.get('user_id'), data.get('name'),
+            outcome, m['home_score'], m['away_score'])
+
+    return jsonify({
+        'ok': True,
+        'result': m,
+        'your_zones': _fbgame.zone_strengths(home),
+        'cpu_zones': _fbgame.zone_strengths(away),
+        'cpu_name': cpu_name,
+        'outcome': outcome,
+        'league_you': league_you,
+    })
+
+
+@app.route('/api/football/league')
+def api_football_league():
+    """Read the persistent global league table."""
+    uid = request.args.get('user_id', '')
+    s = _fb_load_league()
+    table = _fbleague.ranked_table(s)
+    you = next((r for r in table if r['uid'] == uid), None)
+    return jsonify({'ok': True, 'table': table[:50], 'count': len(table), 'you': you})
+
+
+# ---- Football manager 1v1 (multiplayer) ----
+
+def fbmp_public_state(fbmp):
+    """Per-client view of a football 1v1 room (light: the player pool comes
+    over HTTP, so only readiness and the finished result travel in state)."""
+    if not fbmp:
+        return None
+    subs = fbmp.get('submissions') or {}
+    names = fbmp.get('names', {})
+    ready = {s: bool((subs.get(s) or {}).get('ready')) for s in names}
+    out = {
+        'phase': fbmp.get('phase', 'draft'),
+        'budget': fbmp.get('budget', _fbgame.BUDGET),
+        'home_sid': fbmp.get('home_sid'),
+        'away_sid': fbmp.get('away_sid'),
+        'names': names,
+        'ready': ready,
+    }
+    if fbmp.get('phase') == 'match' and fbmp.get('result'):
+        out['result'] = fbmp['result']
+    return out
+
+
+@socketio.on('football_ready')
+def on_football_ready(data):
+    """A player locks in their squad + tactic. When both are ready the server
+    simulates one match (no AI, no home edge) and broadcasts the same timeline
+    to both clients, recording both results in the global league."""
+    sid = request.sid
+    room, code = _get_room_for_sid(sid)
+    if not room:
+        return
+    data = data or {}
+    sq = data.get('squad') or {}
+    tactic = data.get('tactic', _fbmatch.DEFAULT_TACTIC)
+    if tactic not in _fbmatch.TACTICS:
+        tactic = _fbmatch.DEFAULT_TACTIC
+    squad = {
+        'formation': sq.get('formation', _fbgame.DEFAULT_FORMATION),
+        'starting': list(sq.get('starting', [])),
+        'bench': list(sq.get('bench', [])),
+    }
+    ok, why = _fbgame.validate_squad(squad)
+    if not ok:
+        emit('error_msg', {'msg': why})
+        return
+    with room['lock']:
+        state = room['state']
+        fbmp = state.get('football_mp')
+        if not fbmp or state.get('phase') != 'fb_draft':
+            return
+        if sid not in fbmp.get('names', {}):
+            return
+        fbmp['submissions'][sid] = {
+            'squad': squad, 'tactic': tactic, 'ready': True,
+            'name': fbmp['names'].get(sid, 'Manager'),
+        }
+        home_sid = fbmp['home_sid']
+        away_sid = fbmp['away_sid']
+        both = ((fbmp['submissions'].get(home_sid) or {}).get('ready')
+                and (fbmp['submissions'].get(away_sid) or {}).get('ready'))
+        if both:
+            hs = fbmp['submissions'][home_sid]
+            as_ = fbmp['submissions'][away_sid]
+            m = _fbmatch.simulate_match(
+                hs['squad'], as_['squad'],
+                home_tactic=hs['tactic'], away_tactic=as_['tactic'],
+                give_home_edge=False, away_ai=False,
+                home_name=fbmp['names'][home_sid], away_name=fbmp['names'][away_sid])
+            if m['home_score'] > m['away_score']:
+                home_oc, away_oc = 'win', 'loss'
+            elif m['home_score'] < m['away_score']:
+                home_oc, away_oc = 'loss', 'win'
+            else:
+                home_oc = away_oc = 'draw'
+            fbmp['result'] = {
+                'home_sid': home_sid, 'away_sid': away_sid,
+                'home_name': fbmp['names'][home_sid], 'away_name': fbmp['names'][away_sid],
+                'home_score': m['home_score'], 'away_score': m['away_score'],
+                'events': m['events'], 'stats': m['stats'],
+                'home_zones': _fbgame.zone_strengths(hs['squad']),
+                'away_zones': _fbgame.zone_strengths(as_['squad']),
+                'result_id': int(time.time() * 1000),
+            }
+            fbmp['phase'] = 'match'
+            state['phase'] = 'fb_match'
+            uids = fbmp.get('uids', {})
+            try:
+                _fb_record_result(uids.get(home_sid), fbmp['names'][home_sid],
+                                  home_oc, m['home_score'], m['away_score'])
+                _fb_record_result(uids.get(away_sid), fbmp['names'][away_sid],
+                                  away_oc, m['away_score'], m['home_score'])
+            except Exception as e:
+                print('[fbmp] league record failed:', e)
+        touch_room(room)
+    broadcast_state(room['state'], code)
+
+
+@socketio.on('football_rematch')
+def on_football_rematch():
+    """Send both players back to the draft for another match."""
+    sid = request.sid
+    room, code = _get_room_for_sid(sid)
+    if not room:
+        return
+    with room['lock']:
+        state = room['state']
+        fbmp = state.get('football_mp')
+        if not fbmp or state.get('game_type') != 'football':
+            return
+        fbmp['submissions'] = {}
+        fbmp['result'] = None
+        fbmp['phase'] = 'draft'
+        state['phase'] = 'fb_draft'
+        touch_room(room)
+    broadcast_state(room['state'], code)
 
 
 # ---- TriviaRush API ----

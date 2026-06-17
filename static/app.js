@@ -360,7 +360,10 @@ const LIVE_PLAY_SCREENS = new Set([
     'screen-footy-play', 'screen-oneshot',
     'screen-halfit-round', 'screen-halfit-round-end',
     'screen-angle-round', 'screen-angle-round-end',
-    'screen-pict-round', 'screen-pict-round-end'
+    'screen-pict-round', 'screen-pict-round-end',
+    'screen-geo-mp-round', 'screen-geo-mp-round-end',
+    'screen-trivia-mp-round', 'screen-trivia-mp-round-end',
+    'screen-footy-mp-round', 'screen-footy-mp-round-end'
 ]);
 function isOnLivePlayScreen() {
     return LIVE_PLAY_SCREENS.has(State._currentScreen);
@@ -404,7 +407,7 @@ function debugLogInit() {
 // Build version this JS file expects. Must match server's /version response.
 // Auto-reload if they diverge (catches stale browser caches even when the
 // no-cache headers are bypassed by a proxy / service worker).
-const GAMEROOM_BUILD = 'v37';
+const GAMEROOM_BUILD = 'v39';
 async function checkBuildVersion() {
     try {
         const res = await fetch('/version', {cache: 'no-store'});
@@ -988,6 +991,8 @@ function routePhase(s) {
     else if (phase === 'angle_round_end') renderAngleRoundEnd(s);
     else if (phase === 'pict_round') renderPictRound(s);
     else if (phase === 'pict_round_end') renderPictRoundEnd(s);
+    else if (phase === 'fb_draft') renderFbMpDraft(s);
+    else if (phase === 'fb_match') renderFbMpMatch(s);
     else if (phase === 'game_over' && s.game_type === 'timeshot') renderTsGameOver(s);
     else if (phase === 'game_over' && s.game_type === 'geography') renderGeoMpGameOver(s);
     else if (phase === 'game_over' && s.game_type === 'trivia') renderTriviaMpGameOver(s);
@@ -2632,9 +2637,9 @@ function wireInviteModal() {
 }
 
 function wireHome() {
-    // Sign out of Google (reverts to guest)
+    // Sign out → full logout, back to the landing screen
     const signOutBtn = document.getElementById('sign-out-btn');
-    if (signOutBtn) signOutBtn.onclick = () => { signOutGoogle(); };
+    if (signOutBtn) signOutBtn.onclick = () => { logoutToLanding(); };
 
     // Game cards go straight to mode picker. By this point the player MUST
     // have entered their name (the landing → guest-name flow guarantees it).
@@ -2684,6 +2689,14 @@ function wireHome() {
 // Game-specific copy and capability flags for the mode picker.
 // Each entry says what each mode does for that game (or 'coming next' if unbuilt).
 const GAME_MODE_CONFIG = {
+    football: {
+        label: 'Team Manager',
+        title: 'Out-manage your opponent',
+        blurb: 'Draft a squad on a budget, pick your formation and tactics, then beat the CPU or a friend 1v1. Skill decides it, not luck.',
+        solo: { available: true, desc: 'vs Computer' },
+        faceoff: { available: true, desc: '1v1 online' },
+        group: { available: false, desc: 'Coming next' }
+    },
     guessduel: {
         label: 'GuessDuel',
         title: 'Guess my number first',
@@ -2891,6 +2904,7 @@ function handleModePicked(game, mode) {
         // Game-specific solo launchers
         if (game === 'oneshot') { oneshotShowIntro(); return; }
         if (game === 'footymind') { footymindShowIntro(); return; }
+        if (game === 'football') { footballShowIntro(); return; }
         if (game === 'trivia') { triviaShowIntro(); return; }
         if (game === 'geo') { geoShowIntro(); return; }
         if (game === 'timeshot') { tsShowIntro('solo'); return; }
@@ -3317,7 +3331,7 @@ function wireGameOver() {
 }
 
 function wireMenu() {
-    $('btn-menu').onclick = () => { soundClick(); showOverlay('menu-overlay'); };
+    $('btn-menu').onclick = () => { soundClick(); showOverlay('menu-overlay'); refreshMenuAuth(); };
     document.querySelectorAll('[data-close]').forEach(b => {
         b.onclick = (e) => {
             soundClick();
@@ -3445,6 +3459,8 @@ function wireMenu() {
         hideOverlay('menu-overlay');
         $('about-modal').classList.remove('hidden');
     };
+    const logoutBtn = document.getElementById('menu-logout');
+    if (logoutBtn) logoutBtn.onclick = () => { logoutToLanding(); };
     const onlineBtn = document.getElementById('menu-online');
     if (onlineBtn) {
         onlineBtn.onclick = () => {
@@ -4943,6 +4959,14 @@ socket.on('opponent_left', (data) => {
     const msg = (data && data.msg) || 'Opponent left — you win!';
     toast(msg);
     debugLog('opponent_left: ' + msg);
+    if (FB._inMp) {
+        FB._inMp = false;
+        FB._mpDrafted = false;
+        FB._mpReady = false;
+        if (FB._matchTimer) { try { cancelAnimationFrame(FB._matchTimer); } catch (e) {} FB._matchTimer = null; }
+        leaveCurrentRoomIfAny();
+        showScreen('screen-home');
+    }
 });
 
 socket.on('forfeit_recorded', (data) => {
@@ -6236,6 +6260,25 @@ function googleAuthState() {
     } catch (e) { return null; }
 }
 
+function refreshMenuAuth() {
+    // Show the right state (signed-in vs sign-in), and re-render the Google
+    // button at full size — it was rendered while the menu was hidden, which
+    // can produce a zero-width button until it's re-rendered when visible.
+    renderAuthRow();
+    if (!googleAuthState() && window.google && window.google.accounts && window.google.accounts.id) {
+        const btn = document.getElementById('google-signin-btn');
+        if (btn) {
+            btn.innerHTML = '';
+            try {
+                window.google.accounts.id.renderButton(btn, {
+                    theme: 'outline', size: 'large', text: 'signin_with',
+                    shape: 'pill', logo_alignment: 'left',
+                });
+            } catch (e) {}
+        }
+    }
+}
+
 function renderAuthRow() {
     const g = googleAuthState();
     const signinWrap = document.getElementById('google-signin-wrap');
@@ -6341,6 +6384,42 @@ function signOutGoogle() {
     if (typeof refreshProfileUI === 'function') { refreshProfileUI(); }
 }
 
+function logoutToLanding() {
+    // Full logout: drop any Google session AND the current guest identity,
+    // leave any active room, and return to the landing screen so the user can
+    // sign in fresh or continue as a new guest.
+    soundClick();
+    try { if (State.roomCode) socket.emit('leave_game'); } catch (e) {}
+    try { localStorage.removeItem('gameroom_google'); } catch (e) {}
+    try { localStorage.removeItem('gameroom_name'); } catch (e) {}
+    try { localStorage.removeItem('gameroom_session_v3'); } catch (e) {}
+    // Fresh guest id — a clean slate.
+    const newUid = 'u_' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+    try { localStorage.setItem('gameroom_uid', newUid); } catch (e) {}
+    State.myUserId = newUid;
+    State.myName = '';
+    State.roomCode = '';
+    State.serverState = null;
+    State.phase = null;
+    State.isSpectator = false;
+    State.pickedMode = null;
+    setRoomPill('');
+    _googleSetupDone = false;
+    // Re-identify to the server as the fresh guest.
+    try { socket.emit('hello', { user_id: State.myUserId, name: '' }); } catch (e) {}
+    // Close the menu + any open overlays/modals.
+    hideOverlay('menu-overlay');
+    document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
+    // Clear the name field so the guest flow starts blank.
+    const ni = document.getElementById('input-name'); if (ni) ni.value = '';
+    // Re-render the sign-in button and show the landing screen.
+    renderAuthRow();
+    setupGoogleSignIn();
+    if (typeof refreshProfileUI === 'function') { refreshProfileUI(); }
+    showScreen('screen-landing');
+    toast('Logged out');
+}
+
 function boot() {
     loadTheme();
     loadSoundPrefs();
@@ -6392,6 +6471,7 @@ function boot() {
     wireWordChain();
     wireOneShot();
     wireFootyMind();
+    wireFootball();
     wireTrivia();
     wireGeo();
     wireModePicker();   // wire LAST so handlers can't be clobbered by lobby's selectors
@@ -7611,6 +7691,766 @@ function renderPictGameOver(s) {
     } else if (rows.length > 1) {
         soundLose(); hapticFail();
     }
+}
+
+// =========================================================================
+// FOOTBALL MANAGER (solo vs CPU). Self-contained module.
+// =========================================================================
+const FB = {
+    diff: 'medium',
+    formation: '4-3-3',
+    tactic: 'balanced',
+    budget: 200,
+    starting: [],        // array of player objects (current XI)
+    benchPlayers: [],    // array of player objects (bench)
+    pool: [],            // all players for the transfer market
+    transferTarget: null,
+    _matchData: null,
+    _matchTimer: null,
+    posOrder: ['GK', 'DEF', 'MID', 'FWD'],
+    FORMATION_LIST: ['4-3-3', '4-4-2', '3-5-2', '4-2-3-1', '5-3-2', '4-5-1'],
+    TACTIC_LIST: ['attacking', 'balanced', 'defensive', 'press', 'park-bus'],
+    mode: 'quick',      // 'quick' | 'cup' | 'mp'
+    cup: null,          // { round, names[], levels[] } when in a cup run
+    leagueReturn: 'screen-football-setup',
+    // ---- 1v1 multiplayer ----
+    _inMp: false,
+    _mpDrafted: false,
+    _mpDrafting: false,
+    _mpReady: false,
+    _mpOppReady: false,
+    _mpOppName: '',
+    _mpSide: 'home',
+    _mpRes: null,
+    _mpResultShown: false,
+    _mpLastResultId: null,
+};
+
+const FB_CUP_ROUNDS = ['Quarter-final', 'Semi-final', 'Final'];
+const FB_CUP_LEVELS = ['easy', 'medium', 'hard'];
+
+function fbEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g,
+        c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+function fbInitials(name) {
+    const w = String(name || '').split(/\s+/).filter(Boolean);
+    const s = ((w[0] || '')[0] || '') + ((w[1] || '')[0] || '');
+    return (s || 'CPU').toUpperCase();
+}
+function fbCost() {
+    return FB.starting.concat(FB.benchPlayers).reduce((s, p) => s + p.price, 0);
+}
+function fbOverall() {
+    if (!FB.starting.length) return 0;
+    return Math.round(FB.starting.reduce((a, p) => a + p.rating, 0) / FB.starting.length);
+}
+
+function fbRenderChips(id, list, active, onpick) {
+    const wrap = $(id);
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    list.forEach(item => {
+        const b = document.createElement('button');
+        b.className = 'seg-btn' + (item === active ? ' active' : '');
+        b.textContent = item;
+        b.onclick = () => {
+            try { soundClick(); } catch (e) {}
+            wrap.querySelectorAll('.seg-btn').forEach(x => x.classList.remove('active'));
+            b.classList.add('active');
+            onpick(item);
+        };
+        wrap.appendChild(b);
+    });
+}
+
+function footballShowIntro() {
+    if (!FB.diff) FB.diff = 'medium';
+    if (!FB.formation) FB.formation = '4-3-3';
+    fbRenderChips('fb-setup-formations', FB.FORMATION_LIST, FB.formation, f => { FB.formation = f; });
+    document.querySelectorAll('#fb-diff-list .mode-card').forEach(c =>
+        c.classList.toggle('active', c.dataset.fbdiff === FB.diff));
+    showScreen('screen-football-setup');
+}
+
+async function fbDraft() {
+    try {
+        const r = await fetch('/api/football/new?formation=' + encodeURIComponent(FB.formation));
+        if (!r.ok) throw new Error('http');
+        const d = await r.json();
+        FB.budget = d.budget;
+        FB.pool = d.pool || [];
+        FB.formation = d.squad.formation;
+        FB.starting = (d.squad.starting || []).slice();
+        FB.benchPlayers = (d.squad.bench || []).slice();
+        if (!FB.tactic) FB.tactic = 'balanced';
+        fbRenderSquad();
+        showScreen('screen-football-squad');
+    } catch (e) {
+        toast('Could not load squad');
+    }
+}
+
+function fbRenderSquad() {
+    $('fb-squad-formation').textContent = FB.formation;
+    $('fb-budget-total').textContent = '$' + FB.budget + 'm';
+    fbRenderBudget();
+    fbRenderPitch();
+    fbRenderBench();
+    fbRenderChips('fb-tactic-chips', FB.TACTIC_LIST, FB.tactic, t => { FB.tactic = t; });
+    const banner = $('fb-cup-banner');
+    const kick = $('fb-kickoff');
+    if (FB.mode === 'cup' && FB.cup) {
+        if (banner) {
+            banner.textContent = 'Cup run \u00b7 ' + FB.cup.names[FB.cup.round];
+            banner.classList.remove('hidden');
+        }
+        if (kick) { kick.textContent = 'Play ' + FB.cup.names[FB.cup.round]; kick.disabled = false; }
+    } else if (FB.mode === 'mp') {
+        if (banner) {
+            banner.textContent = '1v1 vs ' + (FB._mpOppName || 'Opponent')
+                + (FB._mpOppReady ? ' \u00b7 opponent ready' : '');
+            banner.classList.remove('hidden');
+        }
+        if (kick) {
+            kick.textContent = FB._mpReady ? 'Waiting for opponent...' : 'Ready';
+            kick.disabled = !!FB._mpReady;
+        }
+    } else {
+        if (banner) banner.classList.add('hidden');
+        if (kick) { kick.textContent = 'Kick off'; kick.disabled = false; }
+    }
+}
+
+function fbRenderBudget() {
+    const cost = Math.round(fbCost() * 10) / 10;
+    const left = Math.round((FB.budget - cost) * 10) / 10;
+    $('fb-budget-spent').textContent = '$' + cost.toFixed(1) + 'm';
+    $('fb-budget-left').textContent = '$' + left.toFixed(1) + 'm remaining';
+    $('fb-squad-rating').textContent = 'OVR ' + fbOverall();
+    const pct = Math.min(100, Math.round(cost / FB.budget * 100));
+    const fill = $('fb-budget-fill');
+    fill.style.width = pct + '%';
+    fill.classList.toggle('over', cost > FB.budget + 0.001);
+}
+
+function fbChipEl(p, isStar) {
+    const b = document.createElement('button');
+    b.className = 'fb-chip' + (isStar ? ' star' : '');
+    b.innerHTML = '<span class="fb-jersey">' + p.rating + '</span>' +
+        '<span class="fb-name">' + fbEsc(p.short) + '</span>' +
+        '<span class="fb-price">$' + p.price.toFixed(1) + 'm</span>';
+    b.onclick = () => fbOpenTransfer(p, false);
+    return b;
+}
+
+function fbRenderPitch() {
+    const pitch = $('fb-pitch');
+    pitch.innerHTML = '';
+    const star = FB.starting.reduce((m, p) => (!m || p.rating > m.rating) ? p : m, null);
+    FB.posOrder.forEach(pos => {
+        const players = FB.starting.filter(p => p.pos === pos);
+        if (!players.length) return;
+        const row = document.createElement('div');
+        row.className = 'fb-row';
+        players.forEach(p => row.appendChild(fbChipEl(p, star && p.id === star.id)));
+        pitch.appendChild(row);
+    });
+}
+
+function fbRenderBench() {
+    const wrap = $('fb-bench');
+    wrap.innerHTML = '';
+    FB.benchPlayers.forEach(p => {
+        const b = document.createElement('button');
+        b.className = 'fb-bench-chip';
+        b.innerHTML = '<div class="fb-pos">' + p.pos + '</div>' +
+            '<div class="fb-name">' + fbEsc(p.short) + '</div>' +
+            '<div class="fb-price">$' + p.price.toFixed(1) + 'm</div>';
+        b.onclick = () => fbOpenTransfer(p, true);
+        wrap.appendChild(b);
+    });
+}
+
+function fbOpenTransfer(player, isBench) {
+    FB.transferTarget = { player, isBench };
+    $('fb-sheet-title').textContent = 'Replace ' + player.short;
+    const inSquad = new Set(FB.starting.concat(FB.benchPlayers).map(p => p.id));
+    const currentCost = fbCost();
+    const left = Math.round((FB.budget - currentCost) * 10) / 10;
+    $('fb-sheet-sub').textContent = player.pos + ' · $' + left.toFixed(1) + 'm in the bank';
+    const cands = FB.pool.filter(p => p.pos === player.pos && !inSquad.has(p.id))
+        .sort((a, b) => b.rating - a.rating);
+    const list = $('fb-sheet-list');
+    list.innerHTML = '';
+    cands.forEach(c => {
+        const newCost = currentCost - player.price + c.price;
+        const afford = newCost <= FB.budget + 0.001;
+        const row = document.createElement('div');
+        row.className = 'fb-sheet-row' + (afford ? '' : ' unaffordable');
+        row.innerHTML = '<span class="fb-sr-name">' + fbEsc(c.short) +
+            ' <span class="fb-sr-club">' + fbEsc(c.club) + '</span></span>' +
+            '<span class="fb-sr-ovr">' + c.rating + '</span>' +
+            '<span class="fb-sr-price">$' + c.price.toFixed(1) + 'm</span>';
+        if (afford) row.onclick = () => fbDoTransfer(player, c);
+        else row.onclick = () => toast('Not enough budget for ' + c.short);
+        list.appendChild(row);
+    });
+    $('fb-transfer-sheet').classList.remove('hidden');
+}
+
+function fbDoTransfer(outP, inP) {
+    const arr = FB.transferTarget && FB.transferTarget.isBench ? FB.benchPlayers : FB.starting;
+    const idx = arr.findIndex(p => p.id === outP.id);
+    if (idx < 0) return;
+    arr[idx] = inP;
+    FB.transferTarget = null;
+    $('fb-transfer-sheet').classList.add('hidden');
+    fbRenderSquad();
+    try { soundClick(); } catch (e) {}
+    toast(inP.short + ' signed');
+}
+
+async function fbKickoff() {
+    if (FB.mode === 'mp') { fbMpReady(); return; }
+    if (fbCost() > FB.budget + 0.001) { toast('Over budget, sell someone first'); return; }
+    const cpuLevel = (FB.mode === 'cup' && FB.cup) ? FB.cup.levels[FB.cup.round] : FB.diff;
+    const payload = {
+        squad: {
+            formation: FB.formation,
+            starting: FB.starting.map(p => p.id),
+            bench: FB.benchPlayers.map(p => p.id),
+        },
+        tactic: FB.tactic,
+        cpu_level: cpuLevel,
+    };
+    try {
+        const r = await fetch('/api/football/firsthalf', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!r.ok) {
+            let msg = 'Invalid squad';
+            try { msg = (await r.json()).msg || msg; } catch (e) {}
+            toast(msg);
+            return;
+        }
+        const d = await r.json();
+        FB._matchData = d;
+        FB.matchState = d.match_state;
+        FB.cpuName = d.cpu_name;
+        FB.htStarting = FB.starting.slice();
+        FB.htBench = FB.benchPlayers.slice();
+        FB.htSubsUsed = 0;
+        FB.htTactic = FB.tactic;
+
+        $('fb-you-name').textContent = d.result.home_name;
+        $('fb-cpu-name').textContent = d.cpu_name;
+        $('fb-cpu-crest').textContent = fbInitials(d.cpu_name);
+        $('fb-score').textContent = '0-0';
+        $('fb-clock').textContent = "0'";
+        $('fb-feed').innerHTML = '';
+        $('fb-ht-panel').classList.add('hidden');
+        $('fb-ft-panel').classList.add('hidden');
+        $('fb-poss-fill').style.width = '50%';
+        $('fb-poss-you').textContent = '50%';
+        $('fb-poss-cpu').textContent = '50%';
+        showScreen('screen-football-match');
+
+        let possYou = 50;
+        try {
+            const p = d.match_state.resume.poss;
+            possYou = Math.round(100 * p.home / (p.home + p.away));
+        } catch (e) {}
+        fbAnimateSegment(d.result.events, 0, 45, 0, 0, possYou, 5000, () => fbShowHalftime());
+    } catch (e) {
+        toast('Match failed to start');
+    }
+}
+
+function fbAnimateSegment(events, startMin, endMin, initHs, initAs, possTarget, durationMs, onComplete) {
+    if (FB._matchTimer) { cancelAnimationFrame(FB._matchTimer); FB._matchTimer = null; }
+    const evs = events.slice().sort((a, b) => a.minute - b.minute);
+    let hs = initHs, as = initAs, ei = 0;
+    const possStart = parseInt($('fb-poss-you').textContent, 10) || 50;
+    const startT = performance.now();
+    function frame(now) {
+        const t = Math.min(1, (now - startT) / durationMs);
+        const minute = Math.floor(startMin + (endMin - startMin) * t);
+        $('fb-clock').textContent = minute + "'";
+        const pv = Math.round(possStart + (possTarget - possStart) * t);
+        $('fb-poss-fill').style.width = pv + '%';
+        $('fb-poss-you').textContent = pv + '%';
+        $('fb-poss-cpu').textContent = (100 - pv) + '%';
+        while (ei < evs.length && evs[ei].minute <= minute) {
+            const ev = evs[ei]; ei++;
+            fbAddFeedItem(ev);
+            if (ev.type === 'goal') {
+                if (ev.team === 'home') hs++; else as++;
+                $('fb-score').textContent = hs + '-' + as;
+                try { soundClick(); } catch (e) {}
+            }
+        }
+        if (t < 1) {
+            FB._matchTimer = requestAnimationFrame(frame);
+        } else {
+            FB._matchTimer = null;
+            if (onComplete) onComplete(hs, as);
+        }
+    }
+    FB._matchTimer = requestAnimationFrame(frame);
+}
+
+function fbAddFeedItem(ev) {
+    const feed = $('fb-feed');
+    const cpuName = (FB._matchData && FB._matchData.cpu_name) || 'Rivals';
+    let html = '';
+    if (ev.type === 'goal') {
+        const asst = ev.assist ? ' <span class="fb-dim">assist ' + fbEsc(ev.assist) + '</span>' : '';
+        const who = ev.team === 'home' ? 'You' : cpuName;
+        html = '<div class="fb-feed-item goal"><span class="fb-min">' + ev.minute +
+            "'</span><span class=\"fb-ico\">⚽</span><span class=\"fb-txt\">" +
+            fbEsc(ev.player) + asst + ' <span class="fb-dim">· ' + fbEsc(who) + '</span></span></div>';
+    } else if (ev.type === 'sub') {
+        const who = ev.team === 'home' ? 'You' : cpuName;
+        html = '<div class="fb-feed-item"><span class="fb-min">' + ev.minute +
+            "'</span><span class=\"fb-ico\">⇄</span><span class=\"fb-txt\">" +
+            fbEsc(ev.player) + ' on for ' + fbEsc(ev.out) + ' <span class="fb-dim">· ' + fbEsc(who) + '</span></span></div>';
+    } else if (ev.type === 'card') {
+        html = '<div class="fb-feed-item"><span class="fb-min">' + ev.minute +
+            "'</span><span class=\"fb-ico\">🟨</span><span class=\"fb-txt\">" + fbEsc(ev.player) + '</span></div>';
+    } else if (ev.type === 'ht') {
+        html = '<div class="fb-feed-divider">Half-time · ' + ev.home_score + '-' + ev.away_score + '</div>';
+    } else {
+        return;
+    }
+    feed.insertAdjacentHTML('afterbegin', html);
+}
+
+function fbShowHalftime() {
+    const r = FB._matchData.result;
+    $('fb-score').textContent = r.home_score + '-' + r.away_score;
+    $('fb-clock').textContent = 'HT';
+    $('fb-ht-score').textContent = r.home_score + '-' + r.away_score;
+    $('fb-ht-subs-left').textContent = '(' + (3 - FB.htSubsUsed) + ' left)';
+    fbRenderHtBench();
+    fbRenderChips('fb-ht-tactic', FB.TACTIC_LIST, FB.htTactic, t => { FB.htTactic = t; });
+    $('fb-ht-panel').classList.remove('hidden');
+    try { $('fb-ht-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {}
+}
+
+function fbRenderHtBench() {
+    const wrap = $('fb-ht-bench');
+    wrap.innerHTML = '';
+    if (!FB.htBench.length) {
+        wrap.innerHTML = '<div class="muted small">No substitutes left.</div>';
+        return;
+    }
+    FB.htBench.forEach(p => {
+        const b = document.createElement('button');
+        b.className = 'fb-bench-chip';
+        b.innerHTML = '<div class="fb-pos">' + p.pos + '</div>' +
+            '<div class="fb-name">' + fbEsc(p.short) + '</div>' +
+            '<div class="fb-price">OVR ' + p.rating + '</div>';
+        b.onclick = () => fbHtPickStarter(p);
+        wrap.appendChild(b);
+    });
+}
+
+function fbHtPickStarter(benchP) {
+    if (FB.htSubsUsed >= 3) { toast('No substitutions left'); return; }
+    $('fb-sheet-title').textContent = 'Bring on ' + benchP.short;
+    $('fb-sheet-sub').textContent = 'Replace which ' + benchP.pos + '?';
+    const starters = FB.htStarting.filter(p => p.pos === benchP.pos);
+    const list = $('fb-sheet-list');
+    list.innerHTML = '';
+    starters.forEach(s => {
+        const row = document.createElement('div');
+        row.className = 'fb-sheet-row';
+        row.innerHTML = '<span class="fb-sr-name">' + fbEsc(s.short) +
+            ' <span class="fb-sr-club">' + fbEsc(s.club) + '</span></span>' +
+            '<span class="fb-sr-ovr">' + s.rating + '</span>' +
+            '<span class="fb-sr-price">off</span>';
+        row.onclick = () => fbHtDoSub(s, benchP);
+        list.appendChild(row);
+    });
+    $('fb-transfer-sheet').classList.remove('hidden');
+}
+
+function fbHtDoSub(starterOff, benchOn) {
+    const idx = FB.htStarting.findIndex(p => p.id === starterOff.id);
+    if (idx < 0) return;
+    FB.htStarting[idx] = benchOn;
+    FB.htBench = FB.htBench.filter(p => p.id !== benchOn.id);
+    FB.htSubsUsed++;
+    $('fb-transfer-sheet').classList.add('hidden');
+    $('fb-ht-subs-left').textContent = '(' + (3 - FB.htSubsUsed) + ' left)';
+    fbRenderHtBench();
+    fbAddFeedItem({ minute: 45, type: 'sub', team: 'home', player: benchOn.short, out: starterOff.short });
+    try { soundClick(); } catch (e) {}
+    toast(benchOn.short + ' on for ' + starterOff.short);
+}
+
+async function fbSecondHalf() {
+    const payload = {
+        squad: { formation: FB.formation, starting: FB.htStarting.map(p => p.id) },
+        tactic: FB.htTactic,
+        match_state: FB.matchState,
+        user_id: (typeof State !== 'undefined' && State.myUserId) || '',
+        name: (typeof State !== 'undefined' && State.myName) || 'Manager',
+        ranked: FB.mode !== 'cup',
+    };
+    try {
+        const r = await fetch('/api/football/secondhalf', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!r.ok) {
+            let msg = 'Could not play the second half';
+            try { msg = (await r.json()).msg || msg; } catch (e) {}
+            toast(msg);
+            return;
+        }
+        const d = await r.json();
+        $('fb-ht-panel').classList.add('hidden');
+        const htHs = FB._matchData.result.home_score;
+        const htAs = FB._matchData.result.away_score;
+        const possYou = d.result.stats.possession_home;
+        fbAnimateSegment(d.result.events, 45, 90, htHs, htAs, possYou, 5000, () => fbShowFullTime(d));
+    } catch (e) {
+        toast('Second half failed to start');
+    }
+}
+
+function fbShowFullTime(d) {
+    const res = d.result;
+    $('fb-score').textContent = res.home_score + '-' + res.away_score;
+    $('fb-clock').textContent = 'FT';
+    const out = $('fb-ft-outcome');
+    const playBtn = $('fb-playagain');
+    const lg = $('fb-ft-league');
+
+    if (FB.mode === 'cup' && FB.cup) {
+        lg.classList.add('hidden');
+        // A knockout needs a winner: settle draws on penalties, lightly tilted
+        // toward the stronger squad (penalties are mostly a lottery).
+        let result = d.outcome, viaPens = false;
+        if (result === 'draw') {
+            viaPens = true;
+            let p = 0.5;
+            try {
+                const edge = ((d.your_zones.overall || 0) - (d.cpu_zones.overall || 0)) / 200;
+                p = Math.max(0.35, Math.min(0.65, 0.5 + edge));
+            } catch (e) {}
+            result = (Math.random() < p) ? 'win' : 'loss';
+        }
+        const isFinal = FB.cup.round >= FB.cup.levels.length - 1;
+        const roundName = FB.cup.names[FB.cup.round];
+        const pens = viaPens ? ' (on penalties)' : '';
+        if (result === 'win' && isFinal) {
+            out.className = 'fb-ft-outcome win';
+            out.textContent = 'Cup champion!';
+            $('fb-ft-reward').textContent = 'You won the cup' + pens + '. +500 XP';
+            playBtn.textContent = 'New cup';
+            playBtn.onclick = () => { try { soundClick(); } catch (e) {} fbStartCup(); };
+            try { triggerConfetti(); } catch (e) {}
+            try { soundWin(); } catch (e) {}
+        } else if (result === 'win') {
+            out.className = 'fb-ft-outcome win';
+            out.textContent = 'Through to the ' + FB.cup.names[FB.cup.round + 1];
+            $('fb-ft-reward').textContent = 'You advance' + pens + '. +100 XP';
+            playBtn.textContent = 'Next round';
+            playBtn.onclick = () => { try { soundClick(); } catch (e) {} fbCupNextRound(); };
+            try { triggerConfetti(); } catch (e) {}
+            try { soundWin(); } catch (e) {}
+        } else {
+            out.className = 'fb-ft-outcome loss';
+            out.textContent = 'Knocked out';
+            $('fb-ft-reward').textContent = 'Beaten in the ' + roundName + pens + '. +40 XP';
+            playBtn.textContent = 'New cup';
+            playBtn.onclick = () => { try { soundClick(); } catch (e) {} fbStartCup(); };
+            try { soundLose(); } catch (e) {}
+        }
+    } else {
+        let label, cls, reward;
+        if (d.outcome === 'win') {
+            label = 'You win!'; cls = 'win'; reward = '+150 XP \u00b7 +30 coins';
+            try { soundWin(); } catch (e) {}
+            try { triggerConfetti(); } catch (e) {}
+        } else if (d.outcome === 'draw') {
+            label = 'Draw'; cls = 'draw'; reward = '+75 XP \u00b7 +10 coins';
+        } else {
+            label = 'You lost'; cls = 'loss'; reward = '+40 XP';
+            try { soundLose(); } catch (e) {}
+        }
+        out.className = 'fb-ft-outcome ' + cls;
+        out.textContent = label;
+        $('fb-ft-reward').textContent = reward;
+        playBtn.textContent = 'Play again';
+        playBtn.onclick = () => { try { soundClick(); } catch (e) {} footballShowIntro(); };
+        if (d.league_you && d.league_you.pos) {
+            lg.textContent = "You're " + fbOrdinal(d.league_you.pos) + " in the global league";
+            lg.classList.remove('hidden');
+        } else {
+            lg.classList.add('hidden');
+        }
+    }
+    $('fb-ft-stats').innerHTML =
+        '<span>Poss <b>' + res.stats.possession_home + '%</b></span>' +
+        '<span>Shots <b>' + res.stats.shots_home + '</b></span>' +
+        '<span>On target <b>' + res.stats.sot_home + '</b></span>';
+    const homeBtn = $('fb-match-home');
+    if (homeBtn) homeBtn.onclick = () => { try { soundClick(); } catch (e) {} leaveCurrentRoomIfAny(); showScreen('screen-home'); };
+    $('fb-ft-panel').classList.remove('hidden');
+}
+
+function fbStartCup() {
+    FB.mode = 'cup';
+    FB.cup = { round: 0, names: FB_CUP_ROUNDS.slice(), levels: FB_CUP_LEVELS.slice() };
+    fbDraft();
+}
+
+function fbCupNextRound() {
+    if (!FB.cup) { footballShowIntro(); return; }
+    FB.cup.round += 1;
+    if (FB.cup.round >= FB.cup.levels.length) { footballShowIntro(); return; }
+    // Keep the drafted squad; let the manager tweak transfers/tactic first.
+    fbRenderSquad();
+    showScreen('screen-football-squad');
+}
+
+function fbOrdinal(n) {
+    const s = ["th", "st", "nd", "rd"], v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+async function fbShowLeague(fromScreen) {
+    FB.leagueReturn = fromScreen || 'screen-football-setup';
+    showScreen('screen-football-league');
+    const rows = $('fb-league-rows');
+    rows.innerHTML = '<div class="muted small">Loading the table...</div>';
+    $('fb-league-you').classList.add('hidden');
+    try {
+        const uid = (typeof State !== 'undefined' && State.myUserId) || '';
+        const r = await fetch('/api/football/league?user_id=' + encodeURIComponent(uid));
+        const d = await r.json();
+        rows.innerHTML = '';
+        d.table.forEach(row => {
+            const isYou = row.uid === uid;
+            const el = document.createElement('div');
+            el.className = 'fb-league-row' + (isYou ? ' you' : '');
+            el.innerHTML = '<span class="fb-lg-pos">' + row.pos + '</span>' +
+                '<span class="fb-lg-name">' + fbEsc(row.name) +
+                (isYou ? ' <span class="fb-lg-tag">you</span>' : '') + '</span>' +
+                '<span>' + row.P + '</span><span>' + row.W + '</span>' +
+                '<span>' + row.D + '</span><span>' + row.L + '</span>' +
+                '<span class="fb-lg-pts">' + row.Pts + '</span>';
+            rows.appendChild(el);
+        });
+        const youEl = $('fb-league-you');
+        if (d.you && d.you.pos > d.table.length) {
+            youEl.innerHTML = '<span class="fb-lg-pos">' + d.you.pos + '</span>' +
+                '<span class="fb-lg-name">' + fbEsc(d.you.name) + ' <span class="fb-lg-tag">you</span></span>' +
+                '<span>' + d.you.P + '</span><span>' + d.you.W + '</span>' +
+                '<span>' + d.you.D + '</span><span>' + d.you.L + '</span>' +
+                '<span class="fb-lg-pts">' + d.you.Pts + '</span>';
+            youEl.classList.remove('hidden');
+        }
+    } catch (e) {
+        rows.innerHTML = '<div class="muted small">Could not load the league.</div>';
+    }
+}
+
+/* =========================  FOOTBALL 1v1 MULTIPLAYER  ========================= */
+
+async function fbMpStartDraft() {
+    FB.mode = 'mp';
+    FB.cup = null;
+    FB._mpDrafted = true;       // optimistic, so a second state broadcast won't double-fetch
+    FB._mpDrafting = false;
+    FB._mpReady = false;
+    try {
+        const r = await fetch('/api/football/new?formation=' + encodeURIComponent(FB.formation));
+        if (!r.ok) throw new Error('http');
+        const d = await r.json();
+        FB.budget = d.budget;
+        FB.pool = d.pool || [];
+        FB.formation = d.squad.formation;
+        FB.starting = (d.squad.starting || []).slice();
+        FB.benchPlayers = (d.squad.bench || []).slice();
+        if (!FB.tactic) FB.tactic = 'balanced';
+        fbRenderSquad();
+        showScreen('screen-football-squad');
+    } catch (e) {
+        FB._mpDrafted = false;
+        toast('Could not load squad');
+    }
+}
+
+function renderFbMpDraft(s) {
+    FB._inMp = true;
+    const f = s.football_mp || {};
+    const mySid = (s.me && s.me.sid) || State.mySid;
+    FB._mpSide = (f.home_sid === mySid) ? 'home' : 'away';
+    const oppSid = (FB._mpSide === 'home') ? f.away_sid : f.home_sid;
+    FB._mpOppName = (f.names && f.names[oppSid]) || 'Opponent';
+    FB._mpReady = !!(f.ready && f.ready[mySid]);
+    FB._mpOppReady = !!(f.ready && f.ready[oppSid]);
+    FB._mpResultShown = false;     // a fresh draft means the next match should replay
+    if (!FB._mpDrafted && !FB._mpDrafting) {
+        FB._mpDrafting = true;
+        fbMpStartDraft();
+    } else {
+        FB.mode = 'mp';
+        fbRenderSquad();           // refresh banner + Ready button with latest readiness
+    }
+}
+
+function fbMpReady() {
+    if (FB._mpReady) return;
+    if (fbCost() > FB.budget + 0.001) { toast('Over budget, sell someone first'); return; }
+    socket.emit('football_ready', {
+        squad: {
+            formation: FB.formation,
+            starting: FB.starting.map(p => p.id),
+            bench: FB.benchPlayers.map(p => p.id),
+        },
+        tactic: FB.tactic,
+    });
+    FB._mpReady = true;
+    const kick = $('fb-kickoff');
+    if (kick) { kick.textContent = 'Waiting for opponent...'; kick.disabled = true; }
+}
+
+function fbMpMapEvents(events, mySide) {
+    if (mySide === 'home') return (events || []).slice();
+    // Away player: flip team so my side animates as "home" (shown as "You").
+    return (events || []).map(ev => {
+        const e = Object.assign({}, ev);
+        if (e.team === 'home') e.team = 'away';
+        else if (e.team === 'away') e.team = 'home';
+        if (e.type === 'ht') { const t = e.home_score; e.home_score = e.away_score; e.away_score = t; }
+        return e;
+    });
+}
+
+function renderFbMpMatch(s) {
+    FB._inMp = true;
+    FB._mpDrafted = false;         // a rematch should draft a fresh squad
+    const f = s.football_mp || {};
+    const res = f.result;
+    if (!res) return;
+    if (FB._mpResultShown && FB._mpLastResultId === res.result_id) return;
+    FB._mpResultShown = true;
+    FB._mpLastResultId = res.result_id;
+    const mySid = (s.me && s.me.sid) || State.mySid;
+    const mySide = (res.home_sid === mySid) ? 'home' : 'away';
+    fbMpReplay(res, mySide);
+}
+
+function fbMpReplay(res, mySide) {
+    const myName = (mySide === 'home') ? res.home_name : res.away_name;
+    const oppName = (mySide === 'home') ? res.away_name : res.home_name;
+    FB._matchData = { cpu_name: oppName };
+    FB._mpRes = res;
+    FB._mpSide = mySide;
+    const evs = fbMpMapEvents(res.events, mySide);
+    const myPoss = (mySide === 'home') ? res.stats.possession_home : res.stats.possession_away;
+    $('fb-you-name').textContent = myName;
+    $('fb-cpu-name').textContent = oppName;
+    const yc = $('fb-you-crest'); if (yc) yc.textContent = fbInitials(myName);
+    const cc = $('fb-cpu-crest'); if (cc) cc.textContent = fbInitials(oppName);
+    $('fb-score').textContent = '0-0';
+    $('fb-clock').textContent = "0'";
+    $('fb-feed').innerHTML = '';
+    $('fb-ht-panel').classList.add('hidden');
+    $('fb-ft-panel').classList.add('hidden');
+    $('fb-poss-fill').style.width = '50%';
+    $('fb-poss-you').textContent = '50%';
+    $('fb-poss-cpu').textContent = '50%';
+    showScreen('screen-football-match');
+    fbAnimateSegment(evs, 0, 90, 0, 0, myPoss, 7000, () => fbMpShowResult());
+}
+
+function fbMpShowResult() {
+    const res = FB._mpRes, mySide = FB._mpSide;
+    if (!res) return;
+    const myScore = (mySide === 'home') ? res.home_score : res.away_score;
+    const oppScore = (mySide === 'home') ? res.away_score : res.home_score;
+    $('fb-score').textContent = myScore + '-' + oppScore;
+    $('fb-clock').textContent = 'FT';
+    const out = $('fb-ft-outcome');
+    let label, cls, reward;
+    if (myScore > oppScore) {
+        label = 'You win!'; cls = 'win'; reward = '+200 XP \u00b7 ranked win';
+        try { triggerConfetti(); } catch (e) {}
+        try { soundWin(); } catch (e) {}
+    } else if (myScore < oppScore) {
+        label = 'You lost'; cls = 'loss'; reward = '+50 XP';
+        try { soundLose(); } catch (e) {}
+    } else {
+        label = 'Draw'; cls = 'draw'; reward = '+100 XP';
+    }
+    out.className = 'fb-ft-outcome ' + cls;
+    out.textContent = label;
+    $('fb-ft-reward').textContent = reward;
+    const poss = (mySide === 'home') ? res.stats.possession_home : res.stats.possession_away;
+    const shots = (mySide === 'home') ? res.stats.shots_home : res.stats.shots_away;
+    const sot = (mySide === 'home') ? res.stats.sot_home : res.stats.sot_away;
+    $('fb-ft-stats').innerHTML =
+        '<span>Poss <b>' + poss + '%</b></span>' +
+        '<span>Shots <b>' + shots + '</b></span>' +
+        '<span>On target <b>' + sot + '</b></span>';
+    $('fb-ft-league').classList.add('hidden');
+    const playBtn = $('fb-playagain');
+    if (playBtn) {
+        playBtn.textContent = 'Rematch';
+        playBtn.disabled = false;
+        playBtn.onclick = () => { try { soundClick(); } catch (e) {} socket.emit('football_rematch'); };
+    }
+    const homeBtn = $('fb-match-home');
+    if (homeBtn) homeBtn.onclick = () => {
+        try { soundClick(); } catch (e) {}
+        FB._inMp = false;
+        leaveCurrentRoomIfAny();
+        showScreen('screen-home');
+    };
+    $('fb-ft-panel').classList.remove('hidden');
+}
+
+function wireFootball() {
+    document.querySelectorAll('#fb-diff-list .mode-card').forEach(c => {
+        c.onclick = () => {
+            try { soundClick(); } catch (e) {}
+            document.querySelectorAll('#fb-diff-list .mode-card').forEach(x => x.classList.remove('active'));
+            c.classList.add('active');
+            FB.diff = c.dataset.fbdiff;
+        };
+    });
+    const draftBtn = $('fb-draft-btn');
+    if (draftBtn) draftBtn.onclick = () => { try { soundClick(); } catch (e) {} FB.mode = 'quick'; FB.cup = null; fbDraft(); };
+    const cupBtn = $('fb-cup-btn');
+    if (cupBtn) cupBtn.onclick = () => { try { soundClick(); } catch (e) {} fbStartCup(); };
+    const reshuffle = $('fb-reshuffle');
+    if (reshuffle) reshuffle.onclick = () => { try { soundClick(); } catch (e) {} fbDraft(); };
+    const kick = $('fb-kickoff');
+    if (kick) kick.onclick = () => { try { soundClick(); } catch (e) {} fbKickoff(); };
+    const second = $('fb-secondhalf');
+    if (second) second.onclick = () => { try { soundClick(); } catch (e) {} fbSecondHalf(); };
+    const sclose = $('fb-sheet-close');
+    if (sclose) sclose.onclick = () => $('fb-transfer-sheet').classList.add('hidden');
+    const sheet = $('fb-transfer-sheet');
+    if (sheet) sheet.onclick = e => { if (e.target === sheet) sheet.classList.add('hidden'); };
+    const again = $('fb-playagain');
+    if (again) again.onclick = () => { try { soundClick(); } catch (e) {} footballShowIntro(); };
+    const viewLeague = $('fb-view-league');
+    if (viewLeague) viewLeague.onclick = () => { try { soundClick(); } catch (e) {} fbShowLeague('screen-football-setup'); };
+    const ftLeague = $('fb-ft-league');
+    if (ftLeague) ftLeague.onclick = () => { try { soundClick(); } catch (e) {} fbShowLeague('screen-football-match'); };
+    const leagueBack = $('fb-league-back');
+    if (leagueBack) leagueBack.onclick = () => { try { soundClick(); } catch (e) {} showScreen(FB.leagueReturn || 'screen-football-setup'); };
 }
 
 document.addEventListener('DOMContentLoaded', boot);
