@@ -407,7 +407,7 @@ function debugLogInit() {
 // Build version this JS file expects. Must match server's /version response.
 // Auto-reload if they diverge (catches stale browser caches even when the
 // no-cache headers are bypassed by a proxy / service worker).
-const GAMEROOM_BUILD = 'v49';
+const GAMEROOM_BUILD = 'v50';
 async function checkBuildVersion() {
     try {
         const res = await fetch('/version', {cache: 'no-store'});
@@ -7784,6 +7784,8 @@ const FB = {
     _pitch: null,
     _pitchTimer: null,
     _playersTimer: null,
+    _paused: false,
+    _pauseAt: null,
     _pitchPoss: 50,
 };
 
@@ -8216,20 +8218,42 @@ function fbPlayersLiveStart() {
         const ball = $('fb-pitch-ball');
         const bx = ball ? parseFloat(ball.getAttribute('cx')) : 50;
         const by = ball ? parseFloat(ball.getAttribute('cy')) : 32;
+        const homeAttacking = bx > 50;     // ball in the away half => home pushing
+        // whichever outfield player is closest to the ball goes and presses it
+        let nearIdx = -1, nearD = 1e9;
+        FB._pitch.dots.forEach((d, i) => {
+            const b = FB._pitch.base[i];
+            if (!b || b.gk) return;
+            const dist = Math.abs(b.x - bx) + Math.abs(b.y - by);
+            if (dist < nearD) { nearD = dist; nearIdx = i; }
+        });
         FB._pitch.dots.forEach((d, i) => {
             const b = FB._pitch.base[i];
             if (!b) return;
             let tx, ty;
             if (b.gk) {
-                // keeper hugs the goal, shuffles a little with the play
-                tx = b.x + (bx - 50) * 0.05;
-                ty = 32 + (by - 32) * 0.22 + (Math.random() - 0.5) * 1.2;
+                const goalX = b.home ? 6 : 94;
+                tx = goalX + (bx - 50) * 0.03;
+                ty = 32 + (by - 32) * 0.25 + (Math.random() - 0.5) * 1.0;
+            } else if (i === nearIdx && nearD < 24) {
+                // chase and meet the ball
+                tx = bx + (Math.random() - 0.5) * 2.4;
+                ty = by + (Math.random() - 0.5) * 2.4;
             } else {
-                // the team shape drifts toward the play; each player keeps their
-                // relative role but pulls toward the ball, with a little jitter so
-                // nobody looks frozen
-                tx = b.x + (bx - b.x) * 0.17 + (Math.random() - 0.5) * 2.8;
-                ty = b.y + (by - b.y) * 0.12 + (Math.random() - 0.5) * 2.8;
+                // role along own attacking direction: 0 = defender .. 1 = striker
+                const role = b.home ? (b.x / 100) : (1 - b.x / 100);
+                const teamAttacking = (b.home && homeAttacking) || (!b.home && !homeAttacking);
+                if (teamAttacking) {
+                    // surge up the pitch, strikers furthest, into the box centrally
+                    const push = 7 + role * 28;
+                    tx = b.home ? Math.min(93, b.x + push) : Math.max(7, b.x - push);
+                    ty = b.y + (32 - b.y) * (0.22 + role * 0.4) + (Math.random() - 0.5) * 3;
+                } else {
+                    // get goal-side: defenders drop deep, attackers stay as an outlet
+                    const drop = 6 + (1 - role) * 22;
+                    tx = b.home ? Math.max(7, b.x - drop) : Math.min(93, b.x + drop);
+                    ty = b.y + (32 - b.y) * 0.18 + (Math.random() - 0.5) * 3;
+                }
             }
             tx = Math.max(3, Math.min(97, tx));
             ty = Math.max(5, Math.min(59, ty));
@@ -8274,6 +8298,7 @@ function fbPitchGoal(side) {
 
 function fbAnimateSegment(events, startMin, endMin, initHs, initAs, possTarget, durationMs, onComplete) {
     if (FB._matchTimer) { cancelAnimationFrame(FB._matchTimer); FB._matchTimer = null; }
+    { const _pb = document.getElementById('fb-pause'); if (_pb) { _pb.style.display = (FB.mode === 'mp') ? 'none' : ''; _pb.disabled = false; } }
     const evs = events.slice().sort((a, b) => a.minute - b.minute);
     let hs = initHs, as = initAs, ei = 0;
     const possStart = parseInt($('fb-poss-you').textContent, 10) || 50;
@@ -8370,10 +8395,96 @@ function fbAddFeedItem(ev) {
             "'</span><span class=\"fb-ico\">·</span><span class=\"fb-txt fb-dim\">" + fbEsc(ev.text) + '</span></div>';
     } else if (ev.type === 'ht') {
         html = '<div class="fb-feed-divider">Half-time · ' + ev.home_score + '-' + ev.away_score + '</div>';
+    } else if (ev.type === 'pen') {
+        const ico = ev.scored === true ? '⚽' : (ev.scored === false ? '❌' : '🥅');
+        html = '<div class="fb-feed-item' + (ev.scored ? ' goal' : '') + '"><span class="fb-min">PEN</span><span class="fb-ico">' +
+            ico + '</span><span class="fb-txt">' + fbEsc(ev.text) + '</span></div>';
     } else {
         return;
     }
     feed.insertAdjacentHTML('afterbegin', html);
+}
+
+function fbPauseMatch() {
+    if (FB.mode === 'mp') { toast('Pause is for solo and cup matches'); return; }
+    if (FB._paused) return;
+    if (!FB._matchTimer) { toast('Wait for kickoff'); return; }
+    cancelAnimationFrame(FB._matchTimer); FB._matchTimer = null;
+    fbPitchAmbientStop();
+    FB._paused = true;
+    const minute = parseInt(($('fb-clock').textContent || '0').replace(/[^0-9]/g, ''), 10) || 0;
+    const sc = ($('fb-score').textContent || '0-0').split('-');
+    FB._pauseAt = {
+        minute: minute,
+        hs: parseInt(sc[0], 10) || 0,
+        as: parseInt(sc[1], 10) || 0,
+        poss: parseInt(($('fb-poss-you').textContent || '50'), 10) || 50,
+    };
+    // reuse the team-talk panel: change shape / tactic / subs, then resume
+    $('fb-ht-score').textContent = FB._pauseAt.hs + '-' + FB._pauseAt.as;
+    FB.htStarting = FB.starting.slice();
+    FB.htBench = FB.benchPlayers.slice();
+    FB.htTactic = FB.tactic;
+    FB.htSubsUsed = 0;
+    $('fb-ht-subs-left').textContent = '(3 left)';
+    fbRenderHtBench();
+    fbRenderChips('fb-ht-tactic', FB.TACTIC_LIST, FB.htTactic, t => { FB.htTactic = t; });
+    const second = $('fb-secondhalf');
+    if (second) {
+        second.disabled = false;
+        second.textContent = 'Resume from ' + minute + "'";
+        second.onclick = () => { try { soundClick(); } catch (e) {} fbResumeFromPause(); };
+    }
+    const opp = $('fb-ht-opp-status'); if (opp) opp.textContent = 'Changes apply for the rest of the match.';
+    $('fb-clock').textContent = minute + "' II";
+    $('fb-ht-panel').classList.remove('hidden');
+    try { $('fb-ht-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {}
+}
+
+async function fbResumeFromPause() {
+    const second = $('fb-secondhalf');
+    if (second) { second.disabled = true; second.textContent = 'Resuming...'; }
+    // commit the changes to the live squad so the rest of the match uses them
+    FB.starting = FB.htStarting.slice();
+    FB.benchPlayers = FB.htBench.slice();
+    FB.tactic = FB.htTactic;
+    const at = FB._pauseAt || { minute: 45, hs: 0, as: 0, poss: 50 };
+    const payload = {
+        squad: {
+            formation: FB.formation,
+            starting: FB.starting.map(p => p.id),
+            bench: FB.benchPlayers.map(p => p.id),
+        },
+        tactic: FB.tactic,
+        match_state: FB.matchState,
+        minute: at.minute,
+        hs: at.hs, as: at.as,
+        home_name: ($('fb-you-name').textContent || 'Your XI'),
+    };
+    try {
+        const r = await fetch('/api/football/continue', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!r.ok) {
+            let msg = 'Could not resume';
+            try { msg = (await r.json()).msg || msg; } catch (e) {}
+            toast(msg);
+            if (second) { second.disabled = false; second.textContent = 'Resume'; }
+            return;
+        }
+        const d = await r.json();
+        $('fb-ht-panel').classList.add('hidden');
+        FB._paused = false;
+        const possYou = (d.result.stats && d.result.stats.possession_home) || at.poss;
+        const dur = Math.max(8000, (90 - at.minute) * 450);
+        fbAnimateSegment(d.result.events, at.minute, 90, at.hs, at.as, possYou, dur,
+                         () => fbShowFullTime(d));
+    } catch (e) {
+        toast('Could not resume');
+        if (second) { second.disabled = false; second.textContent = 'Resume'; }
+    }
 }
 
 function fbShowHalftime() {
@@ -8480,7 +8591,55 @@ async function fbSecondHalf() {
     }
 }
 
-function fbShowFullTime(d) {
+function fbSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// A drawn knockout goes to a real, visible shootout instead of an invisible
+// coin-flip. Conversion is ~72%, nudged slightly by squad quality.
+async function fbPenaltyShootout(youOverall, cpuOverall) {
+    const edge = (((youOverall || 50) - (cpuOverall || 50)) / 400);
+    const youP = Math.max(0.55, Math.min(0.85, 0.72 + edge));
+    const cpuP = Math.max(0.55, Math.min(0.85, 0.72 - edge));
+    const youName = $('fb-you-name').textContent || 'You';
+    const cpuName = $('fb-cpu-name').textContent || 'Rivals';
+    let you = 0, cpu = 0, yk = 0, ck = 0;
+    $('fb-clock').textContent = 'PENS';
+    const feed = $('fb-feed'); if (feed) feed.innerHTML = '';
+    fbAddFeedItem({ type: 'kick', minute: 90, text: 'Level after 90. Penalty shootout!' });
+    const show = () => { $('fb-score').textContent = you + '-' + cpu; };
+    show();
+    const kick = async (home) => {
+        await fbSleep(820);
+        const p = home ? youP : cpuP;
+        const name = home ? youName : cpuName;
+        const scored = Math.random() < p;
+        if (home) { yk++; if (scored) you++; } else { ck++; if (scored) cpu++; }
+        fbAddFeedItem({ type: 'pen', scored: scored,
+            text: name + (scored ? ' scores!' : ' misses!') + '  (' + you + '-' + cpu + ')' });
+        show();
+        try { scored ? soundWin && 0 : 0; } catch (e) {}
+    };
+    // Best of five, with an early finish once it cannot be caught.
+    for (let i = 0; i < 5; i++) {
+        await kick(true);
+        if (you > cpu + (5 - i - 1)) break;        // home already uncatchable
+        if (cpu > you + (5 - i)) break;            // away already uncatchable
+        await kick(false);
+        if (cpu > you + (5 - i - 1)) break;
+        if (you > cpu + (5 - i - 1)) break;
+    }
+    // Sudden death if still level after five each.
+    let guard = 0;
+    while (you === cpu && yk >= 5 && ck >= 5 && guard < 12) {
+        guard++;
+        await kick(true);
+        await kick(false);
+    }
+    if (you === cpu) { you++; await fbSleep(200); show(); }   // safety
+    await fbSleep(700);
+    return { youPens: you, cpuPens: cpu, youWin: you > cpu };
+}
+
+async function fbShowFullTime(d) {
     const res = d.result;
     $('fb-score').textContent = res.home_score + '-' + res.away_score;
     $('fb-clock').textContent = 'FT';
@@ -8490,46 +8649,46 @@ function fbShowFullTime(d) {
 
     if (FB.mode === 'cup' && FB.cup) {
         lg.classList.add('hidden');
-        // A knockout needs a winner: settle draws on penalties, lightly tilted
-        // toward the stronger squad (penalties are mostly a lottery).
-        let result = d.outcome, viaPens = false;
+        let result = d.outcome, viaPens = false, pensLabel = '';
         if (result === 'draw') {
+            const sh = await fbPenaltyShootout(
+                d.your_zones && d.your_zones.overall,
+                d.cpu_zones && d.cpu_zones.overall);
             viaPens = true;
-            let p = 0.5;
-            try {
-                const edge = ((d.your_zones.overall || 0) - (d.cpu_zones.overall || 0)) / 200;
-                p = Math.max(0.35, Math.min(0.65, 0.5 + edge));
-            } catch (e) {}
-            result = (Math.random() < p) ? 'win' : 'loss';
+            result = sh.youWin ? 'win' : 'loss';
+            pensLabel = ' ' + sh.youPens + '-' + sh.cpuPens + ' on pens';
         }
         const isFinal = FB.cup.round >= FB.cup.levels.length - 1;
         const roundName = FB.cup.names[FB.cup.round];
-        const pens = viaPens ? ' (on penalties)' : '';
+        const pens = viaPens ? pensLabel : '';
         if (result === 'win' && isFinal) {
             out.className = 'fb-ft-outcome win';
-            out.textContent = 'Cup champion!';
-            $('fb-ft-reward').textContent = 'You won the cup' + pens + '. +500 XP';
+            out.textContent = 'Cup champion!' + (viaPens ? ' (' + pensLabel.trim() + ')' : '');
+            $('fb-ft-reward').textContent = 'You won the cup. +500 XP';
             playBtn.textContent = 'New cup';
             playBtn.onclick = () => { try { soundClick(); } catch (e) {} fbStartCup(); };
             try { triggerConfetti(); } catch (e) {}
             try { soundWin(); } catch (e) {}
         } else if (result === 'win') {
             out.className = 'fb-ft-outcome win';
-            out.textContent = 'Through to the ' + FB.cup.names[FB.cup.round + 1];
-            $('fb-ft-reward').textContent = 'You advance' + pens + '. +100 XP';
+            out.textContent = 'Through to the ' + FB.cup.names[FB.cup.round + 1] + (viaPens ? ' (' + pensLabel.trim() + ')' : '');
+            $('fb-ft-reward').textContent = 'You advance. +100 XP';
             playBtn.textContent = 'Next round';
             playBtn.onclick = () => { try { soundClick(); } catch (e) {} fbCupNextRound(); };
             try { triggerConfetti(); } catch (e) {}
             try { soundWin(); } catch (e) {}
         } else {
             out.className = 'fb-ft-outcome loss';
-            out.textContent = 'Knocked out';
-            $('fb-ft-reward').textContent = 'Beaten in the ' + roundName + pens + '. +40 XP';
+            out.textContent = 'Knocked out' + (viaPens ? ' (' + pensLabel.trim() + ')' : '');
+            $('fb-ft-reward').textContent = 'Beaten in the ' + roundName + '. +40 XP';
             playBtn.textContent = 'New cup';
             playBtn.onclick = () => { try { soundClick(); } catch (e) {} fbStartCup(); };
             try { soundLose(); } catch (e) {}
         }
-    } else {
+        $('fb-ft-panel').classList.remove('hidden');
+        return;
+    }
+    {
         let label, cls, reward;
         if (d.outcome === 'win') {
             label = 'You win!'; cls = 'win'; reward = '+150 XP \u00b7 +30 coins';
@@ -9114,6 +9273,8 @@ function wireFootball() {
     if (tabPlay) tabPlay.onclick = () => { try { soundClick(); } catch (e) {} showScreen('screen-football-setup'); };
     const skipBtn = $('fb-skip');
     if (skipBtn) skipBtn.onclick = () => { try { soundClick(); } catch (e) {} FB._skip = true; };
+    const pauseBtn = $('fb-pause');
+    if (pauseBtn) pauseBtn.onclick = () => { try { soundClick(); } catch (e) {} fbPauseMatch(); };
     const speedBtn = $('fb-speed');
     if (speedBtn) speedBtn.onclick = () => {
         try { soundClick(); } catch (e) {}

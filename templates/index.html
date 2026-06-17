@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#ffffff">
     <title>GameRoom</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=49">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=50">
     <!-- Google Identity Services (Sign in with Google). Loaded async; the
          client wires it up once /api/public/config returns the client id. -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -1649,6 +1649,7 @@
                     <text id="fb-pitch-flash" x="50" y="35" text-anchor="middle" font-size="11" font-weight="900" fill="#fff" opacity="0" style="paint-order:stroke;stroke:#111;stroke-width:0.6px;">GOAL!</text>
                 </svg>
                 <div class="fb-pitch-controls">
+                    <button id="fb-pause" class="fb-pitch-btn">⏸ Pause</button>
                     <button id="fb-speed" class="fb-pitch-btn">1&times;</button>
                     <button id="fb-skip" class="fb-pitch-btn">Skip &raquo;</button>
                 </div>
@@ -2144,6 +2145,6 @@
         window.INITIAL_MATCH_CODE = "{{ match_code or '' }}";
     </script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="{{ url_for('static', filename='app.js') }}?v=49"></script>
+    <script src="{{ url_for('static', filename='app.js') }}?v=50"></script>
 </body>
 </html>

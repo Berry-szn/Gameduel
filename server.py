@@ -4004,7 +4004,7 @@ def on_mindmeld_rematch():
 def api_version():
     """Return current build tag. Client polls and reloads if its loaded
     version doesn't match — catches stale browser/edge caches."""
-    return jsonify({'version': 'v49'})
+    return jsonify({'version': 'v50'})
 
 
 def _no_cache_html(resp):
@@ -6528,7 +6528,7 @@ def admin_export():
     content = {k: _admin.list_items(k) for k in _admin.KINDS}
     payload = {
         'exported_at': time.time(),
-        'version': 'v49',
+        'version': 'v50',
         'profiles': profiles,
         'admin_content': content,
         'settings': _admin.get_settings(),
@@ -7186,6 +7186,73 @@ def api_football_firsthalf():
         'your_zones': _fbgame.zone_strengths(squad),
         'cpu_zones': _fbgame.zone_strengths(cpu),
         'match_state': match_state,
+    })
+
+
+@app.route('/api/football/continue', methods=['POST'])
+def api_football_continue():
+    """Resume a solo/cup match from an arbitrary minute after the manager paused
+    to change shape, tactic or make subs. Re-simulates [minute, 90] with the new
+    XI against the same CPU, carrying the current score forward. Not ranked (a
+    paused quick match doesn't affect Manager Rating)."""
+    data = request.get_json(silent=True) or {}
+    sq = data.get('squad') or {}
+    tactic = data.get('tactic', _fbmatch.DEFAULT_TACTIC)
+    if tactic not in _fbmatch.TACTICS:
+        tactic = _fbmatch.DEFAULT_TACTIC
+    ms = data.get('match_state') or {}
+    cpu_meta = ms.get('cpu') or {}
+    cpu_level = ms.get('cpu_level', data.get('cpu_level', 'medium'))
+    if cpu_level not in _fbgame.CPU_META:
+        cpu_level = 'medium'
+    minute = int(data.get('minute', _fbmatch.HALF_MINUTES))
+    minute = max(1, min(89, minute))
+    init_hs = int(data.get('hs', 0))
+    init_as = int(data.get('as', 0))
+
+    squad = {
+        'formation': sq.get('formation', _fbgame.DEFAULT_FORMATION),
+        'starting': list(sq.get('starting', [])),
+        'bench': list(sq.get('bench', [])),
+    }
+    ok, why = _fbgame.validate_squad(squad)
+    if not ok:
+        return jsonify({'ok': False, 'msg': why}), 400
+
+    # reuse the same CPU team the match started with, so it stays consistent
+    if cpu_meta.get('starting'):
+        cpu = {
+            'formation': cpu_meta.get('formation', _fbgame.DEFAULT_FORMATION),
+            'starting': cpu_meta['starting'],
+            'bench': cpu_meta.get('bench', []),
+            'name': cpu_meta.get('name', 'Rivals'),
+            'tactic': cpu_meta.get('tactic', 'balanced'),
+        }
+    else:
+        cpu = _fbgame.build_cpu_squad(cpu_level)
+
+    m = _fbmatch.simulate_match(
+        squad, cpu, home_tactic=tactic, away_tactic=cpu.get('tactic', 'balanced'),
+        give_home_edge=False, away_ai=True,
+        home_name=data.get('home_name', 'Your XI'), away_name=cpu.get('name', 'Rivals'),
+        minute_start=minute, minute_end=90,
+        init_hs=init_hs, init_as=init_as)
+
+    if m['home_score'] > m['away_score']:
+        outcome = 'win'
+    elif m['home_score'] < m['away_score']:
+        outcome = 'loss'
+    else:
+        outcome = 'draw'
+
+    return jsonify({
+        'ok': True,
+        'result': m,
+        'your_zones': _fbgame.zone_strengths(squad),
+        'cpu_zones': _fbgame.zone_strengths(cpu),
+        'cpu_name': cpu.get('name', 'Rivals'),
+        'outcome': outcome,
+        'league_you': None,
     })
 
 
